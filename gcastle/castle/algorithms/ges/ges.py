@@ -15,11 +15,13 @@
 
 import numpy as np
 
-from ...common import BaseLearner, Tensor
 from .operators import search
 from .score.local_scores import (BICScore, BDeuScore, DecomposableScore)
+from castle.common import BaseLearner, Tensor
+from castle.common.class_factory import ClassFactory
 
 
+@ClassFactory.algorithms.register()
 class GES(BaseLearner):
     """
     Greedy equivalence search for causal discovering
@@ -47,17 +49,16 @@ class GES(BaseLearner):
         prior equivalent sample size, effective when `criterion='bdeu'`
     Examples
     --------
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
     >>> from castle.datasets import load_dataset
-    >>> from castle.algorithms.ges.ges import GES
 
     >>> X, true_dag, _ = load_dataset(name='IID_Test')
     >>> algo = GES()
     >>> algo.learn(X)
-    >>> GraphDAG(algo.causal_matrix, true_dag, save_name='result_pc')
-    >>> met = MetricsDAG(algo.causal_matrix, true_dag)
-    >>> print(met.metrics)
+    >>> plot_causal_graph(algo.causal_matrix, true_dag, file_path='result_pc.png')
+    >>> met = StructureMetrics(algo.causal_matrix, true_dag)
+    >>> print(met.values)
     """
 
     def __init__(self, criterion='bic', method='scatter', k=0.001, N=10):

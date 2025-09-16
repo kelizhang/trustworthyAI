@@ -1,0 +1,193 @@
+# coding=utf-8
+# Copyright (C) 2021. Huawei Technologies Co., Ltd. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import mindspore
+from castle.common.base import GradientBasedLearner, Tensor
+from castle.common.consts import MCSL_VALID_PARAMS
+from castle.common.validator import check_args_value
+from castle.common.class_factory import ClassFactory
+from .trainers.al_trainer import Trainer
+from .models.masked_model import MaskedModel
+from .helpers.utils import callback_after_training
+
+
+@ClassFactory.algorithms.register()
+class MCSL(GradientBasedLearner):
+    """
+    Masked Gradient-Based Causal Structure Learning
+
+    A gradient-based algorithm for non-linear additive noise data by learning
+    the binary adjacency matrix.
+
+    Parameters
+    ----------
+    model_type: str, default: 'nn'
+        `nn` denotes neural network, `qr` denotes quatratic regression.
+    num_hidden_layers: int, default: 4
+        Number of hidden layer in neural network when `model_type` is 'nn'.
+    hidden_dim: int, default: 16
+        Number of hidden dimension in hidden layer, when `model_type` is 'nn'.
+    graph_thresh: float, default: 0.5
+        Threshold used to determine whether has edge in graph, element greater
+        than the `graph_thresh` means has a directed edge, otherwise has not.
+    l1_graph_penalty: float, default: 2e-3
+        Penalty weight for L1 normalization
+    learning_rate: float, default: 3e-2
+        learning rate for opitimizer
+    iterations: int, default: 25
+        Number of iterations for optimization problem
+    iter_step: int, default: 1000
+        Number of steps for each iteration
+    init_iter: int, default: 2
+        Initial iteration to disallow early stopping
+    h_tol: float, default: 1e-10
+        Tolerance of optimization problem
+    init_rho: float, default: 1e-5
+        Initial value for penalty parameter.
+    rho_thresh: float, default: 1e14
+        Threshold for penalty parameter.
+    h_thresh: float, default: 0.25
+        Threshold for h
+    rho_multiply: float, default: 10.0
+        Multiplication to amplify rho each time
+    temperature: float, default: 0.2
+        Temperature for gumbel sigmoid
+    random_seed: int, default: 1230
+        random seed for every random value
+
+    References
+    ----------
+    https://arxiv.org/abs/1910.08527
+
+    Examples
+    --------
+    >>> import castle
+    >>> castle.set_backend('mindspore')
+    >>> from castle.algorithms import MCSL
+    >>> from castle.datasets import load_dataset
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
+    >>> X, true_dag, _ = load_dataset('IID_Test')
+    >>> algo = MCSL()
+    # If you want to use GPU, you can call CORL().set_context() like the following code:
+    >>> import mindspore as ms
+    >>> algo.set_context(device_target='GPU', mode=ms.GRAPH_MODE) # 'GPU', 'CPU' or 'Ascend'
+    >>> algo.learn(X)
+    >>> plot_causal_graph(algo.causal_matrix, true_dag)
+    >>> met = StructureMetrics(algo.causal_matrix, true_dag)
+    >>> print(met.values)
+    """
+
+    @check_args_value(MCSL_VALID_PARAMS)
+    def __init__(self, model_type='qr', num_hidden_layers=4, hidden_dim=16,
+                 graph_thresh=0.5, l1_graph_penalty=2e-3, learning_rate=3e-2,
+                 iterations=25, iter_step=1000, init_iter=2, h_tol=1e-10,
+                 init_rho=1e-5, rho_thresh=1e14, h_thresh=0.25,
+                 rho_multiply=10, temperature=0.2, random_seed=1230) -> None:
+        super(MCSL, self).__init__()
+
+        self.model_type = model_type
+        self.num_hidden_layers = num_hidden_layers
+        self.hidden_dim = hidden_dim
+        self.graph_thresh = graph_thresh
+        self.l1_graph_penalty = l1_graph_penalty
+        self.learning_rate = learning_rate
+        self.iterations = iterations
+        self.iter_step = iter_step
+        self.init_iter = init_iter
+        self.h_tol = h_tol
+        self.init_rho = init_rho
+        self.rho_thresh = rho_thresh
+        self.h_thresh = h_thresh
+        self.rho_multiply = rho_multiply
+        self.temperature = temperature
+        self.random_seed = random_seed
+
+    def learn(self, data, columns=None, pns_mask=None, **kwargs) -> None:
+        """
+        Set up and run the MCSL algorithm.
+
+        Parameters
+        ----------
+        data: castle.Tensor or numpy.ndarray
+            The castle.Tensor or numpy.ndarray format data you want to learn.
+        columns: Index or array-like
+            Column labels to use for resulting tensor. Will default to
+            RangeIndex (0, 1, 2, ..., n) if no column labels are provided.
+        pns_mask: array_like or None
+            The mask matrix.
+            array with element in {0, 1}, ``0`` denotes has no edge in i -> j,
+            ``1`` denotes maybe has edge in i -> j or not.
+        """
+        self._set_seed(self.random_seed)
+
+        x = Tensor(data, columns=columns)
+
+        self.n_samples, self.n_nodes = x.shape
+        if pns_mask is None:
+            pns_mask = mindspore.numpy.ones([x.shape[1], x.shape[1]])
+        else:
+            pns_mask = mindspore.Tensor(pns_mask)
+
+        causal_matrix, causal_matrix_weight = self._mcsl(x, pns_mask)
+
+        self.causal_matrix_weight = Tensor(causal_matrix_weight,
+                                           index=x.columns,
+                                           columns=x.columns
+                                           )
+        self.causal_matrix = Tensor(causal_matrix,
+                                    index=x.columns,
+                                    columns=x.columns
+                                    )
+
+    def _mcsl(self, x, pns_mask) -> tuple:
+        """
+        Starting model of MCSL.
+
+        Parameters
+        ----------
+        x: mindspore.Tensor
+            The mindspore.Tensor data you want to learn.
+        pns_mask: mindspore.Tensor
+            The mask matrix.
+        """
+        model = MaskedModel(model_type=self.model_type,
+                            n_samples=self.n_samples,
+                            n_nodes=self.n_nodes,
+                            pns_mask=pns_mask,
+                            num_hidden_layers=self.num_hidden_layers,
+                            hidden_dim=self.hidden_dim,
+                            l1_graph_penalty=self.l1_graph_penalty,
+                            seed=self.random_seed,
+                            )
+        trainer = Trainer(model=model,
+                          learning_rate=self.learning_rate,
+                          init_rho=self.init_rho,
+                          rho_thresh=self.rho_thresh,
+                          h_thresh=self.h_thresh,
+                          rho_multiply=self.rho_multiply,
+                          init_iter=self.init_iter,
+                          h_tol=self.h_tol,
+                          temperature=self.temperature,
+                          )
+
+        if not isinstance(x, mindspore.Tensor):
+            x = mindspore.Tensor(x.data, dtype=mindspore.float32)
+        w_logits = trainer.train(x, self.iterations, self.iter_step)
+
+        w_est, w_est_weight = callback_after_training(w_logits,
+                                                      self.temperature,
+                                                      self.graph_thresh)
+        return w_est.asnumpy(), w_est_weight.asnumpy()

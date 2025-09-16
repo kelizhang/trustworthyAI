@@ -82,7 +82,6 @@ def forward_search(C, criterion):
             for T in T0:
                 if not insert_validity(x, y, T, C):
                     continue
-                # det = f (Y, PaPC (Y) ∪ {X} ∪ T ∪ NAY,X ) − f (Y, PaPC (Y) ∪ T ∪ NAY,X ).
                 na_yx = graph.neighbors(y, C) & graph.adjacent(x, C)
                 pa_y = graph.parent(y, C)
                 pa1 = pa_y | {x} | T | na_yx
@@ -164,13 +163,18 @@ def backward_search(C, criterion):
             for H in H0:
                 if not delete_validity(x, y, H, C):
                     continue
-                # det = f (Y, PaPC (Y) ∪ {NAY,X \ H} \ X) − f (Y, PaPC (Y) ∪ {NAY,X \ H}).
                 na_yx = graph.neighbors(y, C) & graph.adjacent(x, C)
                 pa_y = graph.parent(y, C)
                 pa1 = pa_y | ((na_yx - H) - {x})
                 pa2 = pa_y | (na_yx - H)
-                det = (criterion.local_score(y, pa1)
-                       - criterion.local_score(y, pa2))
+                try:
+                    det = (criterion.local_score(y, pa1)
+                           - criterion.local_score(y, pa2))
+                except AttributeError:
+                    raise AttributeError(f"The criterion has no attribute named "
+                                         f"`local_score`, you can create a class inherit"
+                                         f"`DecomposableScore` and implement `local_score`"
+                                         f" method.")
                 if det > best:
                     best = det
                     edge = (x, y)

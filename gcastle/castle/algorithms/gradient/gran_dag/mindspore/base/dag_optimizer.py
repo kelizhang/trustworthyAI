@@ -14,8 +14,9 @@
 # limitations under the License.
 
 import numpy as np
-from mindspore import Tensor as MsTensor, ops, dtype as mstype
+import mindspore as ms
 import mindspore.nn as nn
+import mindspore.ops as ops
 import mindspore.numpy as msnp
 
 
@@ -32,7 +33,7 @@ class GradNetWrtX(nn.Cell):
         super(GradNetWrtX, self).__init__(auto_prefix=False)
         self.network = network
         self.grad_op = ops.GradOperation(sens_param=True)
-        self.flag = MsTensor(True, dtype=mstype.bool_)
+        self.flag = ms.Tensor(True, dtype=ms.bool_)
 
     def construct(self, x, grad_output):
         """
@@ -67,63 +68,11 @@ def is_acyclic(adjacency):
     return True
 
 
-def compute_A_phi(model, norm="none", square=False):
-    """
-    compute matrix A consisting of products of NN weights
-
-    Parameters
-    ----------
-    model: instantiating model objects
-        'NonLinGaussANM' or 'NonLinGauss'
-    norm: str, default 'none'
-        use norm of product of paths, 'none' or 'paths'
-        'paths': use norm, 'none': with no norm
-    square: bool, default False
-        use squared product of paths
-    """
-    weights = model.get_parameters(mode='w')[0]
-    prod = msnp.eye(model.input_dim, dtype=mstype.float32)
-    if norm == "paths":
-        prod_norm = msnp.eye(model.input_dim)
-    for i, w in enumerate(weights):
-        if square:
-            w = w ** 2
-        else:
-            w = ops.absolute(w)
-        if i == 0:
-            tmp_adj = ops.expand_dims(model.adjacency.transpose(), 1)
-            ein_one = ops.mul(w, tmp_adj)
-            prod = ops.matmul(ein_one, prod)
-            if norm == "paths":
-                tmp_adj = 1. - msnp.eye(model.input_dim, dtype=mstype.float32)
-                tmp_adj = ops.expand_dims(tmp_adj.transpose(), 1)
-                ein_two = ops.mul(ops.ones_like(w), tmp_adj)
-                prod_norm = ops.matmul(ein_two, prod_norm)
-        else:
-            prod = ops.matmul(w, prod)
-            if norm == "paths":
-                prod_norm = ops.matmul(ops.ones_like(w), prod_norm)
-
-    # sum over density parameter axis
-    prod = ops.reduce_sum(prod, 1)
-    if norm == "paths":
-        prod_norm = ops.reduce_sum(prod_norm, 1)
-        # avoid / 0 on diagonal
-        denominator = prod_norm + msnp.eye(model.input_dim,
-                                           dtype=mstype.float32)
-        return (prod / denominator).transpose()
-    elif norm == "none":
-        return prod.transpose()
-    else:
-        raise NotImplementedError
-
-
 def compute_jacobian_avg(model, data_manager, batch_size):
     """
     compute the average Jacobian of learned model
     """
-    jac_avg = msnp.zeros((model.input_dim, model.input_dim),
-                         dtype=mstype.float32)
+    jac_avg = msnp.zeros((model.input_dim, model.input_dim))
 
     # sample
     x, _ = data_manager.sample(batch_size)
@@ -131,9 +80,9 @@ def compute_jacobian_avg(model, data_manager, batch_size):
 
     # compute jacobian of the loss
     for k in range(model.input_dim):
-        grad_output = msnp.zeros(shape=x.shape, dtype=mstype.float32)
+        grad_output = msnp.zeros(shape=x.shape)
         grad_output[:, k] = 1
         tmp_grad = GradNetWrtX(model)(x, grad_output)
-        jac_avg[k, :] = ops.reduce_mean(ops.absolute(tmp_grad), 0)
+        jac_avg[k, :] = msnp.mean(msnp.absolute(tmp_grad), 0)
 
     return jac_avg

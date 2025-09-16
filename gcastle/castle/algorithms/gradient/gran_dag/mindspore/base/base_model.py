@@ -14,83 +14,114 @@
 # limitations under the License.
 
 import numpy as np
+import mindspore as ms
 import mindspore.nn as nn
-from mindspore import Parameter, ops, ParameterTuple, dtype as mstype
-from mindspore import Tensor as MsTensor
-from mindspore.common.initializer import initializer, XavierUniform
-import mindspore.nn.probability.distribution as msd
+import mindspore.ops as ops
 import mindspore.numpy as msnp
+from mindspore.nn.loss.loss import LossBase
+from mindspore.nn.probability.distribution import Normal
+from mindspore.common.initializer import initializer, XavierUniform
 
-from .dag_optimizer import compute_A_phi
 
+class GranLoss(LossBase):
+    """
+    Loss class for network train
 
-class BaseModel(nn.Cell):
-    """Base class of LearnableModel, disable instantiation."""
-
-    def __init__(self, input_dim, hidden_num, hidden_dim, output_dim, mu, lamb,
-                 nonlinear="leaky-relu", norm_prod='paths', square_prod=False):
-
-        super(BaseModel, self).__init__()
+    Parameters
+    ----------
+    input_dim: int
+        number of input layer (number of variables), must be int
+    mu: float
+        initialization of penalty coefficient in the optimization of
+        augmented Lagrangian
+    lamb: float
+        initialization of Lagrangian coefficient in the optimization of
+        augmented Lagrangian
+    norm_prod: str
+        use norm of product of paths, 'none' or 'paths'
+        'paths': use norm, 'none': with no norm
+    square_prod: bool
+        use squared product of paths
+    run_mode: str, default 'graph'
+        run mode of code: 'graph' or 'pynative'
+        'graph' is static graph mode, 'pynative' is dynamic graph mode
+    """
+    def __init__(self, input_dim, mu, lamb, norm_prod, square_prod, run_mode):
+        super(GranLoss, self).__init__()
+        """Initialize GranLoss."""
         self.input_dim = input_dim
-        self.hidden_num = hidden_num
-        self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
         self.mu = mu
         self.lamb = lamb
-        self.nonlinear = nonlinear
         self.norm_prod = norm_prod
         self.square_prod = square_prod
-
-        self.normal = msd.Normal(dtype=mstype.float32)
-        self.extra_params = []
+        self.run_mode = run_mode
 
         # initialize current adjacency matrix
-        self.adjacency = msnp.ones((self.input_dim, self.input_dim),
-                                   dtype=mstype.float32) - msnp.eye(
-            self.input_dim, dtype=mstype.float32)
+        self.adjacency = msnp.ones(self.input_dim) - msnp.eye(self.input_dim)
+        if self.run_mode == 'graph':
+            self.k = ms.Parameter(ms.Tensor(1), requires_grad=False)
 
-        # Generate layer_list
-        layer_list = [self.hidden_dim] * self.hidden_num
-        layer_list.insert(0, self.input_dim)
-        layer_list.append(self.output_dim)
+    def get_w_adj(self, weights):
+        """Get weighted adjacency matrix"""
+        return self.compute_A_phi(weights, norm=self.norm_prod, square=self.square_prod)
 
-        # Instantiate the parameters of each layer in the model of each variable
-        tmp_weights = list()
-        tmp_biases = list()
-        for i, item in enumerate(layer_list[:-1]):
-            in_dim = item
-            out_dim = layer_list[i + 1]
-            tmp_weights.append(Parameter(msnp.zeros(
-                (self.input_dim, out_dim, in_dim), dtype=mstype.float32),
-                requires_grad=True, name='w'+str(i)))
-            tmp_biases.append(Parameter(msnp.zeros(
-                (self.input_dim, out_dim), dtype=mstype.float32),
-                requires_grad=True, name='b'+str(i)))
-
-        self.weights = ParameterTuple(tmp_weights)
-        self.biases = ParameterTuple(tmp_biases)
-
-        # reset initialization parameters
-        self.reset_params()
-
-    def construct(self, x, log_flag=False):
+    def compute_A_phi(self, weights, norm="none", square=False):
         """
-        forward network, used to compute augmented Lagrangian value
+        compute matrix A consisting of products of NN weights
+
+        Parameters
+        ----------
+        weights: list of net weights
+        norm: str, default 'none'
+            use norm of product of paths, 'none' or 'paths'
+            'paths': use norm, 'none': with no norm
+        square: bool, default False
+            use squared product of paths
         """
-        # calculate log likelihood
-        log_likelihood = self.compute_log_likelihood(x)
-        if log_flag:
-            return log_likelihood
-        loss_value = -ops.reduce_mean(log_likelihood)
 
-        # calculate constraint
-        w_adj = self.get_w_adj()
-        h = self.compute_constraint(w_adj)
+        prod = msnp.eye(self.input_dim)
+        if norm == "paths":
+            prod_norm = msnp.eye(self.input_dim)
+            for i, w in enumerate(weights):
+                if square:
+                    w = w ** 2
+                else:
+                    w = ops.absolute(w)
+                if i == 0:
+                    tmp_adj = ops.expand_dims(self.adjacency.transpose(), 1)
+                    ein_one = ops.mul(w, tmp_adj)
+                    prod = ops.matmul(ein_one, prod)
+                    tmp_adj = 1. - msnp.eye(self.input_dim)
+                    tmp_adj = ops.expand_dims(tmp_adj.transpose(), 1)
+                    ein_two = ops.mul(ops.ones_like(w), tmp_adj)
+                    prod_norm = ops.matmul(ein_two, prod_norm)
+                else:
+                    prod = ops.matmul(w, prod)
+                    prod_norm = ops.matmul(ops.ones_like(w), prod_norm)
 
-        # compute augmented Lagrangian
-        aug_lagrangian = loss_value + 0.5 * self.mu * (h ** 2) + self.lamb * h
-
-        return aug_lagrangian
+            # sum over density parameter axis
+            prod = msnp.sum(prod, 1)
+            prod_norm = msnp.sum(prod_norm, 1)
+            # avoid / 0 on diagonal
+            denominator = prod_norm + msnp.eye(self.input_dim)
+            return (prod / denominator).transpose()
+        elif norm == "none":
+            for i, w in enumerate(weights):
+                if square:
+                    w = w ** 2
+                else:
+                    w = ops.absolute(w)
+                if i == 0:
+                    tmp_adj = ops.expand_dims(self.adjacency.transpose(), 1)
+                    ein_one = ops.mul(w, tmp_adj)
+                    prod = ops.matmul(ein_one, prod)
+                else:
+                    prod = ops.matmul(w, prod)
+            # sum over density parameter axis
+            prod = msnp.sum(prod, 1)
+            return prod.transpose()
+        else:
+            raise ValueError("Param 'norm_prod' should be in {'paths', 'none'}.")
 
     def compute_constraint(self, w_adj):
         """
@@ -106,51 +137,161 @@ class BaseModel(nn.Cell):
         -------
         h: constraint value
         """
-        assert (w_adj >= 0).asnumpy().all()
-        expm_input = self.get_matrix_exp(w_adj)
+
+        if self.run_mode == 'graph':
+            expm_input = self.get_expm_graph(w_adj)
+        else:
+            expm_input = self.get_expm_pynative(w_adj)
         h = msnp.trace(expm_input) - self.input_dim
 
         return h
 
-    @staticmethod
-    def get_matrix_exp(matrix):
+    def get_expm_graph(self, A):
         """
-        compute matrix exponent
+        Compute the matrix exponential of a square matrix.
 
         Parameters
         ----------
-        matrix: mindspore.Tensor
+        A: mindspore.Tensor
+            a square matrix
 
         Returns
         -------
-        expm: matrix exponent value of A
+        expm_val: mindspore.Tensor
+            matrix exponent value
         """
-        expm_val = msnp.zeros(matrix.shape, dtype=mstype.float32)
-        eye_mat = msnp.eye(matrix.shape[0], dtype=mstype.float32)
-        k = 1.0
+        expm_val = msnp.zeros(A.shape)
+        eye_mat = msnp.eye(A.shape[0])
+        self.k = 1
 
-        while msnp.norm(eye_mat, 1) > 0:
-            expm_val = expm_val + eye_mat
-            eye_mat = msnp.matmul(matrix, eye_mat) / k
-            k += 1.0
+        if msnp.norm(eye_mat, 1) <= 0:
+            return expm_val
+        while True:
+            expm_val += eye_mat
+            eye_mat = msnp.matmul(A, eye_mat) / self.k
+            self.k += 1
+            if msnp.norm(eye_mat, 1) <= 0:
+                break
+
         return expm_val
+
+    @staticmethod
+    def get_expm_pynative(A):
+        """
+        Compute the matrix exponential of a square matrix.
+
+        Parameters
+        ----------
+        A: mindspore.Tensor
+            a square matrix
+
+        Returns
+        -------
+        expm_val: mindspore.Tensor
+            matrix exponent value
+        """
+        expm_val = msnp.zeros(A.shape)
+        eye_mat = msnp.eye(A.shape[0])
+        k = 1
+
+        if msnp.norm(eye_mat, 1) <= 0:
+            return expm_val
+        while True:
+            expm_val += eye_mat
+            eye_mat = msnp.matmul(A, eye_mat) / k
+            k += 1
+            if msnp.norm(eye_mat, 1) <= 0:
+                break
+
+        return expm_val
+
+    def construct(self, inputs, *args):
+        """
+        Applying augmented Lagrangian to solve the continuous constrained problem.
+
+        Parameters
+        ----------
+        inputs: tuple, (log_likelihood, weights)
+            the value output from network
+
+        Returns
+        -------
+        aug_lagrangian: augmented lagrangian value
+        """
+        log_likelihood, weights = inputs[0], inputs[1]
+        loss_value = -ops.mean(log_likelihood)
+
+        # calculate constraint
+        w_adj = self.get_w_adj(weights)
+        h = self.compute_constraint(w_adj)
+
+        # compute augmented Lagrangian
+        aug_lagrangian = loss_value + 0.5 * self.mu * h ** 2 + self.lamb * h
+
+        return aug_lagrangian
+
+
+class BaseModel(nn.Cell):
+    """Base class of LearnableModel, disable instantiation."""
+
+    def __init__(self, input_dim, hidden_num, hidden_dim, output_dim,
+                 nonlinear="leaky-relu"):
+
+        super(BaseModel, self).__init__()
+        self.input_dim = input_dim
+        self.hidden_num = hidden_num
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.nonlinear = nonlinear
+
+        self.normal = Normal()
+        self.extra_params = []
+
+        # initialize current adjacency matrix
+        self.adjacency = msnp.ones(self.input_dim) - msnp.eye(self.input_dim)
+
+        # Generate layer_list
+        layer_list = [self.hidden_dim] * self.hidden_num
+        layer_list.insert(0, self.input_dim)
+        layer_list.append(self.output_dim)
+
+        # Instantiate the parameters of each layer in the model of each variable
+        tmp_weights = list()
+        tmp_biases = list()
+        for i, item in enumerate(layer_list[:-1]):
+            in_dim = item
+            out_dim = layer_list[i + 1]
+            tmp_weights.append(ms.Parameter(msnp.zeros(
+                (self.input_dim, out_dim, in_dim)),
+                requires_grad=True, name='w'+str(i)))
+            tmp_biases.append(ms.Parameter(msnp.zeros(
+                (self.input_dim, out_dim)),
+                requires_grad=True, name='b'+str(i)))
+
+        self.weights = ms.ParameterTuple(tmp_weights)
+        self.biases = ms.ParameterTuple(tmp_biases)
+
+        # reset initialization parameters
+        self.reset_params()
 
     def compute_log_likelihood(self, x):
         """
         Return log-likelihood of the model for each example.
         WARNING: This is really a joint distribution
-            only if the DAG constraint on the mask is satisfied.
+            only if the DAG constraint on the mask is satisfied,
             otherwise the joint does not integrate to one.
 
         Parameters
         ----------
         x: mindspore.Tensor
             (batch_size, input_dim)
+
         Returns
         -------
         (batch_size, input_dim) log-likelihoods
         """
-        weights, biases, extra_params = self.get_parameters(mode="wbx")
+        weights, biases, extra_params = self.get_weight_bias_parameters(
+            mode=('w', 'b', 'x'))
         density_params = self.forward_given_params(x, weights, biases)
 
         log_probs = []
@@ -179,6 +320,7 @@ class BaseModel(nn.Cell):
             ith list contains weights for ith MLP
         biases: List
             ith list contains biases for ith MLP
+
         Returns
         -------
         out: batch_size x num_vars * num_params
@@ -206,47 +348,30 @@ class BaseModel(nn.Cell):
 
         return ops.Unstack(axis=1)(x)
 
-    def get_trainable_params(self):
-        """get trainable parameters of network"""
-        para_list = list(self.parameters_and_names())
-        trainable_para_list = list()
-        for para in para_list:
-            tmp_para = para[1]
-            if tmp_para.requires_grad is True:
-                trainable_para_list.append(tmp_para)
-
-        return trainable_para_list
-
-    def get_w_adj(self):
-        """Get weighted adjacency matrix"""
-        return compute_A_phi(self, norm=self.norm_prod, square=self.square_prod)
-
     def reset_params(self):
         """reset initialize parameter of network"""
         for node in range(self.input_dim):
             for i, w in enumerate(self.weights):
                 w = w[node]
-                tmp_w = initializer(XavierUniform(),
-                                    shape=w.shape,
-                                    dtype=mstype.float32)
+                tmp_w = initializer(XavierUniform(), shape=w.shape)
                 self.weights[i][node] = tmp_w
             for i, b in enumerate(self.biases):
                 b = b[node]
-                tmp_b = msnp.zeros((b.shape[0]), dtype=mstype.float32)
+                tmp_b = msnp.zeros((b.shape[0]))
                 self.biases[i][node] = tmp_b
 
-    def get_parameters(self, mode="wbx"):
+    def get_weight_bias_parameters(self, mode=('w', 'b', 'x')):
         """
         Will get only parameters with requires_grad == True
 
         Parameters
         ----------
-        mode: str
+        mode: tuple
             w=weights, b=biases, x=extra_params (order is irrelevant)
+
         Returns
         -------
-        out: list
-            corresponding list of list of parameters
+        params: list, corresponding list of list of parameters
         """
 
         params = list()
@@ -265,8 +390,7 @@ class BaseModel(nn.Cell):
         if 'x' in mode:
             extra_params = []
             for ep in self.extra_params:
-                if ep.requires_grad:
-                    extra_params.append(ep)
+                extra_params.append(ep)
             params.append(extra_params)
 
         return params
@@ -304,8 +428,17 @@ class BaseModel(nn.Cell):
                 if ep.requires_grad:
                     self.extra_params[i][0] = extra_params[i][0]
 
-    def get_distribution(self, x_d, dp_mean, dp_std):
-        raise NotImplementedError
+    def construct(self, x, log_flag=False):
+        """
+        forward network, used to compute log_likelihood value
+        """
+        # calculate log likelihood
+        log_likelihood = self.compute_log_likelihood(x)
+        if log_flag:
+            return log_likelihood
+        weights = self.get_weight_bias_parameters(mode=('w', ))[0]
+
+        return log_likelihood, weights
 
 
 class LearnableModel(BaseModel):
@@ -316,23 +449,12 @@ class LearnableModel(BaseModel):
                  hidden_num,
                  hidden_dim,
                  output_dim,
-                 mu,
-                 lamb,
-                 nonlinear="leaky-relu",
-                 norm_prod='paths',
-                 square_prod=False):
+                 nonlinear="leaky-relu"):
         super(LearnableModel, self).__init__(input_dim=input_dim,
                                              hidden_num=hidden_num,
                                              hidden_dim=hidden_dim,
                                              output_dim=output_dim,
-                                             mu=mu,
-                                             lamb=lamb,
-                                             nonlinear=nonlinear,
-                                             norm_prod=norm_prod,
-                                             square_prod=square_prod)
-
-    def get_distribution(self, x_d, dp_mean, dp_std):
-        raise NotImplementedError
+                                             nonlinear=nonlinear)
 
 
 class NonlinearGauss(LearnableModel):
@@ -348,19 +470,8 @@ class NonlinearGauss(LearnableModel):
     hidden_dim: int
         number of dimension per hidden layer
     output_dim: int
-    mu: float
-        initialization of penalty coefficient in the optimization of
-        augmented Lagrangian
-    lamb: float
-        initialization of Lagrangian coefficient in the optimization of
-        augmented Lagrangian
     nonlinear: str, default 'leaky-relu'
         name of Nonlinear activation function
-    norm_prod: str, default 'paths'
-        use norm of product of paths, 'none' or 'paths'
-        'paths': use norm, 'none': with no norm
-    square_prod: bool, default False
-        use squared product of paths
     """
 
     def __init__(self,
@@ -368,20 +479,12 @@ class NonlinearGauss(LearnableModel):
                  hidden_num,
                  hidden_dim,
                  output_dim,
-                 mu,
-                 lamb,
-                 nonlinear="leaky-relu",
-                 norm_prod='paths',
-                 square_prod=False):
+                 nonlinear="leaky-relu"):
         super(NonlinearGauss, self).__init__(input_dim=input_dim,
                                              hidden_num=hidden_num,
                                              hidden_dim=hidden_dim,
                                              output_dim=output_dim,
-                                             mu=mu,
-                                             lamb=lamb,
-                                             nonlinear=nonlinear,
-                                             norm_prod=norm_prod,
-                                             square_prod=square_prod)
+                                             nonlinear=nonlinear)
 
     def get_distribution(self, x_d, dp_mean, dp_std):
         return self.normal.log_prob(x_d, dp_mean, ops.exp(dp_std))
@@ -400,19 +503,8 @@ class NonlinearGaussANM(LearnableModel):
     hidden_dim: int
         number of dimension per hidden layer
     output_dim: int
-    mu: float
-        initialization of penalty coefficient in the optimization of
-        augmented Lagrangian
-    lamb: float
-        initialization of Lagrangian coefficient in the optimization of
-        augmented Lagrangian
     nonlinear: str, default 'leaky-relu'
         name of Nonlinear activation function
-    norm_prod: str, default 'paths'
-        use norm of product of paths, 'none' or 'paths'
-        'paths': use norm, 'none': with no norm
-    square_prod: bool, default False
-        use squared product of paths
     """
 
     def __init__(self,
@@ -420,33 +512,25 @@ class NonlinearGaussANM(LearnableModel):
                  hidden_num,
                  hidden_dim,
                  output_dim,
-                 mu,
-                 lamb,
-                 nonlinear="leaky-relu",
-                 norm_prod='paths',
-                 square_prod=False):
+                 nonlinear="leaky-relu"):
         super(NonlinearGaussANM, self).__init__(input_dim=input_dim,
                                                 hidden_num=hidden_num,
                                                 hidden_dim=hidden_dim,
                                                 output_dim=output_dim,
-                                                mu=mu,
-                                                lamb=lamb,
-                                                nonlinear=nonlinear,
-                                                norm_prod=norm_prod,
-                                                square_prod=square_prod)
+                                                nonlinear=nonlinear)
 
         # extra parameters are log_std
-        extra_params = np.ones((self.input_dim,))
+        extra_params = np.ones(self.input_dim)
         np.random.shuffle(extra_params)
         extra_params_list = list()
         for i, extra_param in enumerate(extra_params):
-            extra_params_list.append(Parameter(
-                MsTensor(np.log(extra_param).reshape(1), dtype=mstype.float32),
+            extra_params_list.append(ms.Parameter(
+                ms.Tensor(np.log(extra_param).reshape(1), dtype=ms.float32),
                 requires_grad=True, name='e' + str(i)))
 
         # each element in the list represents a variable,
         # the size of the element is the number of extra_params per var
-        self.extra_params = ParameterTuple(extra_params_list)
+        self.extra_params = ms.ParameterTuple(extra_params_list)
 
     def get_distribution(self, x_d, dp_mean, dp_std):
         return self.normal.log_prob(x_d, dp_mean, ops.exp(dp_std))

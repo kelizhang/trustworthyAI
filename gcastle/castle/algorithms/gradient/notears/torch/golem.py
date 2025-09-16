@@ -1,9 +1,4 @@
 # coding=utf-8
-# 2021.03 modified (1) golem(def) to GOLEM(class)
-#                  (2) replace tensorflow with pytorch
-# 2021.03 added    (1) get_args, set_seed; 
-#                  (2) BaseLearner
-# 2021.03 deleted  (1) __main__
 # Huawei Technologies Co., Ltd. 
 # 
 # Copyright (C) 2021. Huawei Technologies Co., Ltd. All rights reserved.
@@ -24,33 +19,35 @@
 
 import logging
 import torch
-import os
-
 from .golem_utils import GolemModel
 from .golem_utils.train import postprocess
 from .golem_utils.utils import set_seed
+from castle.common import GradientBasedLearner, Tensor
+from castle.common.class_factory import ClassFactory
 
-from castle.common import BaseLearner, Tensor
 
-
-class GOLEM(BaseLearner):
+@ClassFactory.algorithms.register()
+class GOLEM(GradientBasedLearner):
     """
     GOLEM Algorithm.
     A more efficient version of NOTEARS that can reduce number of optimization iterations.
 
-    Paramaters
+    Parameters
     ----------
     B_init: None
         File of weighted matrix for initialization. Set to None to disable.
+        If not None, the shape of B_init must equal to (n_variables, n_variables).
     lambda_1: float
         Coefficient of L1 penalty.
     lambda_2: float
         Coefficient of DAG penalty.
     equal_variances: bool
         Assume equal noise variances for likelibood objective.
+    non_equal_variances: bool
+        Assume non-equal noise variances for likelibood objective.
     learning_rate: float
         Learning rate of Adam optimizer.
-    num_iter: float
+    iterations: float
         Number of iterations for training.
     checkpoint_iter: int
         Number of iterations between each checkpoint. Set to None to disable.
@@ -58,10 +55,6 @@ class GOLEM(BaseLearner):
         Random seed.
     graph_thres: float
         Threshold for weighted matrix.
-    device_type: bool
-        whether to use GPU or not
-    device_ids: int
-        choose which gpu to use
 
     Attributes
     ----------
@@ -79,27 +72,26 @@ class GOLEM(BaseLearner):
     --------
     >>> from castle.algorithms import GOLEM
     >>> from castle.datasets import load_dataset
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
     >>> X, true_dag, topology_matrix = load_dataset(name='IID_Test')
     >>> n = GOLEM()
     >>> n.learn(X)
-    >>> GraphDAG(n.causal_matrix, true_dag)
-    >>> met = MetricsDAG(n.causal_matrix, true_dag)
-    >>> print(met.metrics)
+    >>> plot_causal_graph(n.causal_matrix, true_dag)
+    >>> met = StructureMetrics(n.causal_matrix, true_dag)
+    >>> print(met.values)
     """
     
     def __init__(self, B_init=None,
                  lambda_1=2e-2,
                  lambda_2=5.0,
                  equal_variances=True,
+                 non_equal_variances=True,
                  learning_rate=1e-3,
-                 num_iter=1e+5,
+                 iterations=1e+5,
                  checkpoint_iter=5000,
                  seed=1,
-                 graph_thres=0.3,
-                 device_type='cpu',
-                 device_ids=0):
+                 graph_thres=0.3):
 
         super().__init__()
 
@@ -107,28 +99,12 @@ class GOLEM(BaseLearner):
         self.lambda_1 = lambda_1
         self.lambda_2 = lambda_2
         self.equal_variances = equal_variances
+        self.non_equal_variances = non_equal_variances
         self.learning_rate = learning_rate
-        self.num_iter = num_iter
+        self.iterations = iterations
         self.checkpoint_iter = checkpoint_iter
         self.seed = seed
         self.graph_thres = graph_thres
-        self.device_type = device_type
-        self.device_ids = device_ids
-
-        if torch.cuda.is_available():
-            logging.info('GPU is available.')
-        else:
-            logging.info('GPU is unavailable.')
-            if self.device_type == 'gpu':
-                raise ValueError("GPU is unavailable, "
-                                 "please set device_type = 'cpu'.")
-        if self.device_type == 'gpu':
-            if self.device_ids:
-                os.environ['CUDA_VISIBLE_DEVICES'] = str(self.device_ids)
-            device = torch.device('cuda')
-        else:
-            device = torch.device('cpu')
-        self.device = device
 
     def learn(self, data, columns=None, **kwargs):
         """
@@ -143,6 +119,25 @@ class GOLEM(BaseLearner):
         columns : Index or array-like
             Column labels to use for resulting tensor. Will default to
             RangeIndex (0, 1, 2, ..., n) if no column labels are provided.
+        lambda_1: float
+            Coefficient of L1 penalty.
+        lambda_2: float
+            Coefficient of DAG penalty.
+        equal_variances: bool
+            Whether to assume equal noise variances
+            for likelibood objective. Default: True.
+        iterations:int
+            Number of iterations for training.
+        learning_rate: float
+            Learning rate of Adam optimizer. Default: 1e-3.
+        seed: int
+            Random seed. Default: 1.
+        checkpoint_iter: int
+            Number of iterations between each checkpoint.
+            Set to None to disable. Default: None.
+        B_init: numpy.ndarray or None
+            [d, d] weighted matrix for initialization.
+            Set to None to disable. Default: None.
         """
 
         X = Tensor(data, columns=columns)
@@ -176,7 +171,7 @@ class GOLEM(BaseLearner):
         """
         set_seed(self.seed)
         n, d = X.shape
-        X = torch.Tensor(X).to(self.device)
+        X = torch.Tensor(X.data).to(self.device)
 
         # Set up model
         model = GolemModel(n=n, d=d, lambda_1=self.lambda_1,
@@ -187,8 +182,8 @@ class GOLEM(BaseLearner):
 
         self.train_op = torch.optim.Adam(model.parameters(), lr=self.learning_rate)
 
-        logging.info("Started training for {} iterations.".format(int(self.num_iter)))
-        for i in range(0, int(self.num_iter) + 1):
+        logging.info("Started training for {} iterations.".format(int(self.iterations)))
+        for i in range(0, int(self.iterations) + 1):
             model(X)
             score, likelihood, h, B_est = model.score, model.likelihood, model.h, model.B
             

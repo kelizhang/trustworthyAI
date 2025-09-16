@@ -21,8 +21,10 @@ from .utils.base import _BaseLiNGAM
 from castle.common import BaseLearner, Tensor
 from castle.common.consts import DIRECT_LINGAM_VALID_PARAMS
 from castle.common.validator import check_args_value
+from castle.common.class_factory import ClassFactory
 
 
+@ClassFactory.algorithms.register()
 class DirectLiNGAM(_BaseLiNGAM, BaseLearner):
     """
     DirectLiNGAM Algorithm.
@@ -63,14 +65,14 @@ class DirectLiNGAM(_BaseLiNGAM, BaseLearner):
     --------
     >>> from castle.algorithms import DirectLiNGAM
     >>> from castle.datasets import load_dataset
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
     >>> X, true_dag, _ = load_dataset(name='IID_Test')
     >>> n = DirectLiNGAM()
     >>> n.learn(X)
-    >>> GraphDAG(n.causal_matrix, true_dag)
-    >>> met = MetricsDAG(n.causal_matrix, true_dag)
-    >>> print(met.metrics)
+    >>> plot_causal_graph(n.causal_matrix, true_dag)
+    >>> met = StructureMetrics(n.causal_matrix, true_dag)
+    >>> print(met.values)
     """
 
     @check_args_value(DIRECT_LINGAM_VALID_PARAMS)
@@ -97,7 +99,7 @@ class DirectLiNGAM(_BaseLiNGAM, BaseLearner):
 
         X = Tensor(data, columns=columns)
     
-        self.fit(X)
+        self.fit(X.data)
         
         weight_causal_matrix = self.adjacency_matrix_.T
         self.weight_causal_matrix = Tensor(weight_causal_matrix,
@@ -158,11 +160,13 @@ class DirectLiNGAM(_BaseLiNGAM, BaseLearner):
         self._causal_order = K
         return self._estimate_adjacency_matrix(X)
 
-    def _residual(self, xi, xj):
+    @staticmethod
+    def _residual(xi, xj):
         """The residual when xi is regressed on xj."""
         return xi - (np.cov(xi, xj)[0, 1] / np.var(xj)) * xj
 
-    def _entropy(self, u):
+    @staticmethod
+    def _entropy(u):
         """Calculate entropy using the maximum entropy approximations."""
         k1 = 79.047
         k2 = 7.4129
@@ -232,7 +236,8 @@ class DirectLiNGAM(_BaseLiNGAM, BaseLearner):
             M_list.append(-1.0 * M)
         return Uc[np.argmax(M_list)]
 
-    def _mutual_information(self, x1, x2, param):
+    @staticmethod
+    def _mutual_information(x1, x2, param):
         """Calculate the mutual informations."""
         kappa, sigma = param
         n = len(x1)

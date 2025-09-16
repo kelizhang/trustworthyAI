@@ -35,6 +35,8 @@ class Actor(object):
         dimension of input data, number of variables, number of DAG node.
     embed_dim: int, default: 256
         dimension of embedding space S.
+    encoder_name: str, default: 'transformer'
+        Indicates type of encoder, one of [`transformer`, `lstm`, `mlp`]
     encoder_blocks: int, default: 3
         Effective when `encoder`='transformer'.
         Design for the neural network structure of the Transformer encoder,
@@ -43,10 +45,10 @@ class Actor(object):
     encoder_heads: int, default: 8
         Effective when `encoder_name`='transformer'.
         head number of multi-head attention network,
-    encoder_name: str, default: 'transformer'
-        Indicates type of encoder, one of [`transformer`, `lstm`, `mlp`]
     decoder_name: str, default: 'lstm'
         Indicates type of decoder, one of [`lstm`, `mlp`]
+    device: option, default: None
+        torch.device('cpu') or torch.device('cuda').
     """
 
     ENCODER_HIDDEN_DIM = 1024
@@ -78,13 +80,13 @@ class Actor(object):
                                               device=self.device)
         elif self.encoder_name.lower() == 'lstm':
             self.encoder = LSTMEncoder(input_dim=self.input_dim,
-                                embed_dim=self.embed_dim,
-                                device=self.device)
+                                       embed_dim=self.embed_dim,
+                                       device=self.device)
         elif self.encoder_name.lower() == 'mlp':
             self.encoder = MLPEncoder(input_dim=self.input_dim,
-                              embed_dim=self.embed_dim,
-                              hidden_dim=self.ENCODER_HIDDEN_DIM,
-                              device=self.device)
+                                      embed_dim=self.embed_dim,
+                                      hidden_dim=self.ENCODER_HIDDEN_DIM,
+                                      device=self.device)
         else:
             raise ValueError(f'Invalid encoder type, expected one of '
                              f'[`transformer`, `lstm`, `mlp`], but got'
@@ -92,12 +94,12 @@ class Actor(object):
 
         if self.decoder_name.lower() == 'lstm':
             self.decoder = LSTMDecoder(input_dim=self.embed_dim,
-                                hidden_dim=self.embed_dim,
-                                device=self.device)
+                                       hidden_dim=self.embed_dim,
+                                       device=self.device)
         elif self.decoder_name.lower() == 'mlp':
             self.decoder = MLPDecoder(input_dim=self.embed_dim,
-                              hidden_dim=self.embed_dim,
-                              device=self.device)
+                                      hidden_dim=self.embed_dim,
+                                      device=self.device)
         else:
             raise ValueError(f'Invalid decoder type, expected one of '
                              f'[`lstm`, `mlp`], but got ``{self.decoder_name}``.')
@@ -118,9 +120,9 @@ class Actor(object):
             encoder_output.shape=(batch_size, n_nodes, embed_dim)
         """
 
-        self.encoder_output = self.encoder(input)
+        encoder_output = self.encoder(input)
 
-        return self.encoder_output
+        return encoder_output
 
     def decode(self, input) -> torch.Tensor:
         """

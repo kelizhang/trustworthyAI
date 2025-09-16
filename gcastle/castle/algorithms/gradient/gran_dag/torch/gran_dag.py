@@ -13,23 +13,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import logging
 import torch
 import numpy as np
 from tqdm import tqdm
 from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.feature_selection import SelectFromModel
-
 from .base import NonlinearGauss
 from .base import NonlinearGaussANM
 from .base import compute_constraint
 from .base import compute_jacobian_avg
 from .base import is_acyclic
-
-from castle.common import BaseLearner, Tensor
+from castle.common import GradientBasedLearner, Tensor
 from castle.common.validator import check_args_value
 from castle.common.consts import GRANDAG_VALID_PARAMS
+from castle.common.class_factory import ClassFactory
 
 
 class NormalizationData(object):
@@ -57,9 +54,9 @@ class NormalizationData(object):
     """
 
     def __init__(self, data, normalize=False, mean=None, std=None,
-                 shuffle=False, train_size=0.8, train=True, random_seed=42):
+                 shuffle=False, train_size=0.8, train=True, random_seed=42, device=None):
         self.random = np.random.RandomState(random_seed)
-
+        self.device = device
         shuffle_idx = np.arange(data.shape[0])
         if shuffle:
             self.random.shuffle(shuffle_idx)
@@ -73,7 +70,7 @@ class NormalizationData(object):
         else:
             data = data[shuffle_idx[train_samples:]]
         # as tensor
-        self.data_set = torch.as_tensor(data).type(torch.Tensor)
+        self.data_set = torch.as_tensor(data, device=self.device)
 
         # Normalize data
         self.mean, self.std = mean, std
@@ -106,7 +103,8 @@ class NormalizationData(object):
         return samples, torch.ones_like(samples)
 
 
-class GraNDAG(BaseLearner):
+@ClassFactory.algorithms.register()
+class GraNDAG(GradientBasedLearner):
     """
     Gradient Based Neural DAG Learner
 
@@ -117,8 +115,6 @@ class GraNDAG(BaseLearner):
 
     Parameters
     ----------
-    input_dim : int
-        number of input layer, must be int
     hidden_num : int, default 2
         number of hidden layers
     hidden_dim : int, default 10
@@ -137,8 +133,6 @@ class GraNDAG(BaseLearner):
         Method of optimize, `rmsprop` or `sgd`
     h_threshold : float, default 1e-8
         constrained threshold
-    device_type : str, default 'cpu'
-        use gpu or cpu
     use_pns : bool, default False
         whether use pns before training, if nodes > 50, use it.
     pns_thresh : float, default 0.75
@@ -177,26 +171,24 @@ class GraNDAG(BaseLearner):
 
     Examples
     --------
-        Load data
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
-    >>> from castle.datasets import DAG, IIDSimulation
+    >>> import castle
+    >>> castle.set_backend('pytorch')
     >>> from castle.algorithms import GraNDAG
-    
-    >>> data, true_dag, _ = load_dataset('IID_Test')
-
-    >>> gnd = GraNDAG(input_dim=data.shape[1])
-    >>> gnd.learn(data=data)
-
-        Also print GraN_DAG.model.adjacency with torch.Tensor type
-        or print GranN_DAG.causal_matrix with numpy.ndarray.
-    >>> print(gnd.causal_matrix)
-    >>> print(gnd.model.adjacency)
+    >>> from castle.datasets import load_dataset
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
+    >>> X, true_dag, _ = load_dataset('IID_Test')
+    >>> algo = GraNDAG()
+    # If you want to use GPU, you can call CORL().set_context() like the following code:
+    >>> algo.set_context(device_target='GPU') # 'GPU', 'CPU' or 'Ascend'
+    >>> algo.learn(X)
+    >>> plot_causal_graph(algo.causal_matrix, true_dag)
+    >>> met = StructureMetrics(algo.causal_matrix, true_dag)
+    >>> print(met.values)
     """
 
     @check_args_value(GRANDAG_VALID_PARAMS)
-    def __init__(self, input_dim,
-                 hidden_num=2,
+    def __init__(self, hidden_num=2,
                  hidden_dim=10,
                  batch_size=64,
                  lr=0.001,
@@ -205,8 +197,6 @@ class GraNDAG(BaseLearner):
                  nonlinear='leaky-relu',
                  optimizer='rmsprop',
                  h_threshold=1e-8,
-                 device_type='cpu',
-                 device_ids='0',
                  use_pns=False,
                  pns_thresh=0.75,
                  num_neighbors=None,
@@ -224,7 +214,7 @@ class GraNDAG(BaseLearner):
                  square_prod=False):
         super(GraNDAG, self).__init__()
 
-        self.input_dim = input_dim
+        self.input_dim = None
         self.hidden_num = hidden_num
         self.hidden_dim = hidden_dim
         self.batch_size = batch_size
@@ -234,8 +224,6 @@ class GraNDAG(BaseLearner):
         self.nonlinear = nonlinear
         self.optimizer = optimizer
         self.h_threshold = h_threshold
-        self.device_type = device_type
-        self.device_ids = device_ids
         self.use_pns = use_pns
         self.pns_thresh = pns_thresh
         self.num_neighbors = num_neighbors
@@ -265,41 +253,12 @@ class GraNDAG(BaseLearner):
         """
 
         # Control as much randomness as possible
-        torch.manual_seed(self.random_seed)
-        np.random.seed(self.random_seed)
-
-        # Use gpu
-        if torch.cuda.is_available():
-            logging.info('GPU is available.')
-        else:
-            logging.info('GPU is unavailable.')
-            if self.device_type == 'gpu':
-                raise ValueError("GPU is unavailable, "
-                                 "please set device_type = 'cpu'.")
-        if self.device_type == 'gpu':
-            if self.precision:
-                torch.set_default_tensor_type('torch.cuda.FloatTensor')
-            else:
-                torch.set_default_tensor_type('torch.cuda.DoubleTensor')
-            if self.device_ids:
-                os.environ['CUDA_VISIBLE_DEVICES'] = str(self.device_ids)
-            device = torch.device('cuda')
-        else:
-            if self.precision:
-                torch.set_default_tensor_type('torch.FloatTensor')
-            else:
-                torch.set_default_tensor_type('torch.DoubleTensor')
-            device = torch.device('cpu')
-        self.device = device
+        self._set_seed(self.random_seed)
 
         # create learning model and ground truth model
         data = Tensor(data, columns=columns)
 
-        if data.shape[1] != self.input_dim:
-            raise ValueError("The number of variables is `{}`, "
-                             "the param input_dim is `{}`, "
-                             "they must be consistent"
-                             ".".format(data.shape[1], self.input_dim))
+        self.input_dim = data.shape[1]
 
         if self.model_name == "NonLinGauss":
             self.model = NonlinearGauss(input_dim=self.input_dim,
@@ -308,7 +267,8 @@ class GraNDAG(BaseLearner):
                                         output_dim=2,
                                         nonlinear=self.nonlinear,
                                         norm_prod=self.norm_prod,
-                                        square_prod=self.square_prod)
+                                        square_prod=self.square_prod,
+                                        device=self.device)
         elif self.model_name == "NonLinGaussANM":
             self.model = NonlinearGaussANM(input_dim=self.input_dim,
                                            hidden_num=self.hidden_num,
@@ -316,18 +276,21 @@ class GraNDAG(BaseLearner):
                                            output_dim=1,
                                            nonlinear=self.nonlinear,
                                            norm_prod=self.norm_prod,
-                                           square_prod=self.square_prod)
+                                           square_prod=self.square_prod,
+                                           device=self.device)
         else:
             raise ValueError(
                 "self.model has to be in {NonLinGauss, NonLinGaussANM}")
 
         # create NormalizationData
-        train_data = NormalizationData(data, train=True,
-                                       normalize=self.normalize)
-        test_data = NormalizationData(data, train=False,
+        train_data = NormalizationData(data.data, train=True,
+                                       normalize=self.normalize,
+                                       device=self.device)
+        test_data = NormalizationData(data.data, train=False,
                                       normalize=self.normalize,
                                       mean=train_data.mean,
-                                      std=train_data.std)
+                                      std=train_data.std,
+                                      device=self.device)
 
         # apply preliminary neighborhood selection if input_dim > 50
         if self.use_pns:
@@ -336,7 +299,7 @@ class GraNDAG(BaseLearner):
             else:
                 num_neighbors = self.num_neighbors
 
-            self.model = neighbors_selection(model=self.model, all_samples=data,
+            self.model = neighbors_selection(model=self.model, all_samples=data.data,
                                              num_neighbors=num_neighbors,
                                              thresh=self.pns_thresh)
 
@@ -393,7 +356,7 @@ class GraNDAG(BaseLearner):
                                       .format(self.optimizer))
 
         # Learning loop:
-        for iter in tqdm(range(self.iterations), desc='Training Iterations'):
+        for it in tqdm(range(self.iterations), desc='Training Iterations'):
             # compute loss
             self.model.train()
             x, _ = train_data.sample(self.batch_size)
@@ -423,34 +386,33 @@ class GraNDAG(BaseLearner):
                     self.model.adjacency *= to_keep
 
             # logging
-            w_adjs[iter, :, :] = w_adj.detach().cpu().numpy().astype(np.float32)
+            w_adjs[it, :, :] = w_adj.detach().cpu().numpy().astype(np.float32)
             mus.append(mu)
             lambdas.append(lamb)
             not_nlls.append(0.5 * mu * h.item() ** 2 + lamb * h.item())
 
             # compute augmented lagrangian moving average
             aug_lagrangians.append(aug_lagrangian.item())
-            aug_lagrangian_ma[iter + 1] = aug_lagrangian_ma[iter] + \
-                                          0.01 * (aug_lagrangian.item() -
-                                                  aug_lagrangian_ma[iter])
+            aug_lagrangian_ma[it + 1] = aug_lagrangian_ma[it] + 0.01 * (aug_lagrangian.item() -
+                                                                        aug_lagrangian_ma[it])
             grad_norms.append(self.model.get_grad_norm("wbx").item())
-            grad_norm_ma[iter + 1] = grad_norm_ma[iter] + \
-                                     0.01 * (grad_norms[-1] - grad_norm_ma[iter])
+            grad_norm_ma[it + 1] = grad_norm_ma[it] + 0.01 * (grad_norms[-1] -
+                                                              grad_norm_ma[it])
 
             # compute loss on whole validation set
-            if iter % self.stop_crit_win == 0:
+            if it % self.stop_crit_win == 0:
                 with torch.no_grad():
                     x, _ = test_data.sample(test_data.n_samples)
                     loss_val = - torch.mean(self.model.compute_log_likelihood(x,
-                                                                 weights,
-                                                                 biases,
-                                                                 extra_params))
+                                                                              weights,
+                                                                              biases,
+                                                                              extra_params))
                     nlls_val.append(loss_val.item())
-                    aug_lagrangians_val.append([iter, loss_val + not_nlls[-1]])
+                    aug_lagrangians_val.append([it, loss_val + not_nlls[-1]])
 
             # compute delta for lambda
-            if iter >= 2 * self.stop_crit_win \
-                    and iter % (2 * self.stop_crit_win) == 0:
+            if it >= 2 * self.stop_crit_win \
+                    and it % (2 * self.stop_crit_win) == 0:
                 t0 = aug_lagrangians_val[-3][1]
                 t_half = aug_lagrangians_val[-2][1]
                 t1 = aug_lagrangians_val[-1][1]
@@ -480,7 +442,7 @@ class GraNDAG(BaseLearner):
                     with torch.no_grad():
                         gap_in_not_nll = 0.5 * mu * h.item() ** 2 + \
                                          lamb * h.item() - not_nlls[-1]
-                        aug_lagrangian_ma[iter + 1] += gap_in_not_nll
+                        aug_lagrangian_ma[it + 1] += gap_in_not_nll
                         aug_lagrangians_val[-1][1] += gap_in_not_nll
 
                     if self.optimizer == "rmsprop":
@@ -524,7 +486,7 @@ class GraNDAG(BaseLearner):
             epsilon = 1e-8
             for step, t in enumerate(thresholds):
                 to_keep = torch.Tensor(A > t + epsilon)
-                new_adj = self.model.adjacency * to_keep
+                new_adj = self.model.adjacency * to_keep.to(device=self.device)
                 if is_acyclic(new_adj, device=self.device):
                     self.model.adjacency.copy_(new_adj)
                     break

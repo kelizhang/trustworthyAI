@@ -20,9 +20,11 @@ import joblib
 
 from castle.common import BaseLearner, Tensor
 from castle.common.independence_tests import CITest
-from castle.common.priori_knowledge import orient_by_priori_knowledge
+from castle.common.prior_knowledge import orient_by_prior_knowledge
+from castle.common.class_factory import ClassFactory
 
 
+@ClassFactory.algorithms.register()
 class PC(BaseLearner):
     """PC algorithm
 
@@ -46,8 +48,8 @@ class PC(BaseLearner):
     ci_test : str, callable
         ci_test method, if str, must be one of [`fisherz`, `g2`, `chi2`]
         See more: `castle.common.independence_tests.CITest`
-    priori_knowledge: PrioriKnowledge
-        a class object PrioriKnowledge
+    prior_knowledge: PriorKnowledge
+        a class object PriorKnowledge
 
     Attributes
     ----------
@@ -56,33 +58,32 @@ class PC(BaseLearner):
 
     Examples
     --------
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
     >>> from castle.datasets import load_dataset
-    >>> from castle.algorithms import PC
 
     >>> X, true_dag, _ = load_dataset(name='IID_Test')
     >>> pc = PC(variant='stable')
     >>> pc.learn(X)
-    >>> GraphDAG(pc.causal_matrix, true_dag, save_name='result_pc')
-    >>> met = MetricsDAG(pc.causal_matrix, true_dag)
-    >>> print(met.metrics)
+    >>> plot_causal_graph(pc.causal_matrix, true_dag, file_path='result_pc.png')
+    >>> met = StructureMetrics(pc.causal_matrix, true_dag)
+    >>> print(met.values)
 
     >>> pc = PC(variant='parallel')
     >>> pc.learn(X, p_cores=2)
-    >>> GraphDAG(pc.causal_matrix, true_dag, save_name='result_pc')
-    >>> met = MetricsDAG(pc.causal_matrix, true_dag)
-    >>> print(met.metrics)
+    >>> plot_causal_graph(pc.causal_matrix, true_dag, file_path='result_pc.png')
+    >>> met = StructureMetrics(pc.causal_matrix, true_dag)
+    >>> print(met.values)
     """
 
     def __init__(self, variant='original', alpha=0.05, ci_test='fisherz',
-                 priori_knowledge=None):
+                 prior_knowledge=None):
         super(PC, self).__init__()
         self.variant = variant
         self.alpha = alpha
         self.ci_test = ci_test
         self.causal_matrix = None
-        self.priori_knowledge = priori_knowledge
+        self.prior_knowledge = prior_knowledge
 
     def learn(self, data, columns=None, **kwargs):
         """Set up and run the PC algorithm.
@@ -107,15 +108,15 @@ class PC(BaseLearner):
 
         data = Tensor(data, columns=columns)
 
-        skeleton, sep_set = find_skeleton(data,
+        skeleton, sep_set = find_skeleton(data.data,
                                           alpha=self.alpha,
                                           ci_test=self.ci_test,
                                           variant=self.variant,
-                                          priori_knowledge=self.priori_knowledge,
+                                          prior_knowledge=self.prior_knowledge,
                                           **kwargs)
 
         self._causal_matrix = Tensor(
-            orient(skeleton, sep_set, self.priori_knowledge).astype(int),
+            orient(skeleton, sep_set, self.prior_knowledge).astype(int),
             index=data.columns,
             columns=data.columns
         )
@@ -123,7 +124,7 @@ class PC(BaseLearner):
 
 def _loop(G, d):
     """
-    Check if |adj(x, G)\{y}| < d for every pair of adjacency vertices in G
+    Check if |adj(x, G)/{y}| < d for every pair of adjacency vertices in G
 
     Parameters
     ----------
@@ -135,7 +136,7 @@ def _loop(G, d):
     Returns
     -------
     out: bool
-        if False, denote |adj(i, G)\{j}| < d for every pair of adjacency
+        if False, denote |adj(i, G)/{j}| < d for every pair of adjacency
         vertices in G, then finished loop.
     """
 
@@ -156,7 +157,7 @@ def _loop(G, d):
         return True
 
 
-def orient(skeleton, sep_set, priori_knowledge=None):
+def orient(skeleton, sep_set, prior_knowledge=None):
     """Extending the Skeleton to the Equivalence Class
 
     it orients the undirected edges to form an equivalence class of DAGs.
@@ -169,6 +170,8 @@ def orient(skeleton, sep_set, priori_knowledge=None):
         separation sets
         if key is (x, y), then value is a set of other variables
         not contains x and y
+    prior_knowledge: PriorKnowledge
+        a class object PriorKnowledge
 
     Returns
     -------
@@ -178,8 +181,8 @@ def orient(skeleton, sep_set, priori_knowledge=None):
         which includes both directed and undirected edges.
     """
 
-    if priori_knowledge is not None:
-        skeleton = orient_by_priori_knowledge(skeleton, priori_knowledge)
+    if prior_knowledge is not None:
+        skeleton = orient_by_prior_knowledge(skeleton, prior_knowledge)
 
     columns = list(range(skeleton.shape[1]))
     cpdag = deepcopy(abs(skeleton))
@@ -213,7 +216,7 @@ def orient(skeleton, sep_set, priori_knowledge=None):
                     all_k = [x for x in columns if x not in ij]
                     for k in all_k:
                         if (cpdag[i, k] == 1 and cpdag[k, i] == 0) \
-                            and (cpdag[k, j] == 1 and cpdag[j, k] == 0):
+                                and (cpdag[k, j] == 1 and cpdag[j, k] == 0):
                             cpdag[j, i] = 0
                 # rule3
                 for i, j in permutations(ij, 2):
@@ -254,7 +257,7 @@ def orient(skeleton, sep_set, priori_knowledge=None):
 
 
 def find_skeleton(data, alpha, ci_test, variant='original',
-                  priori_knowledge=None, base_skeleton=None,
+                  prior_knowledge=None, base_skeleton=None,
                   p_cores=1, s=None, batch=None):
     """Find skeleton graph from G using PC algorithm
 
@@ -275,6 +278,8 @@ def find_skeleton(data, alpha, ci_test, variant='original',
     variant : str, default 'original'
         variant of PC algorithm, contains [`original`, `stable`, `parallel`].
         If variant == 'parallel', need to provide the flowing 3 parameters.
+    prior_knowledge: PriorKnowledge
+        a class object PriorKnowledge
     base_skeleton : array, (n_features, n_features)
         prior matrix, must be undirected graph.
         The two conditionals `base_skeleton[i, j] == base_skeleton[j, i]`
@@ -370,11 +375,11 @@ def find_skeleton(data, alpha, ci_test, variant='original',
         skeleton = base_skeleton
     nodes = set(range(n_feature))
 
-    # update skeleton based on priori knowledge
+    # update skeleton based on prior knowledge
     for i, j in combinations(nodes, 2):
-        if priori_knowledge is not None and (
-                priori_knowledge.is_forbidden(i, j)
-                and priori_knowledge.is_forbidden(j, i)):
+        if prior_knowledge is not None and (
+                prior_knowledge.is_forbidden(i, j)
+                and prior_knowledge.is_forbidden(j, i)):
             skeleton[i, j] = skeleton[j, i] = 0
 
     sep_set = {}

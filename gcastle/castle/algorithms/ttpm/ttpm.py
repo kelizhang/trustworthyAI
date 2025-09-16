@@ -20,8 +20,11 @@ import networkx as nx
 from itertools import product
 
 from castle.common import BaseLearner, Tensor
-from castle.common.priori_knowledge import PrioriKnowledge
+from castle.common.class_factory import ClassFactory
+from castle.common.prior_knowledge import PriorKnowledge
 
+
+@ClassFactory.algorithms.register()
 class TTPM(BaseLearner):
     """
     TTPM Algorithm.
@@ -48,16 +51,16 @@ class TTPM(BaseLearner):
     penalty: str, default=BIC
         Two optional values: 'BIC' or 'AIC'.
         
-    max_iter: int
+    iterations: int
         Maximum number of iterations.
 
-    priori_knowledge: PrioriKnowledge, default=None
-        a class object PrioriKnowledge
+    prior_knowledge: PriorKnowledge, default=None
+        a class object PriorKnowledge
 
     Examples
     --------
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
     >>> from castle.datasets import load_dataset
     >>> from castle.algorithms import TTPM
     # Data Simulation for TTPM
@@ -66,29 +69,30 @@ class TTPM(BaseLearner):
     >>> ttpm.learn(X)
     >>> causal_matrix = ttpm.causal_matrix
     # plot est_dag and true_dag
-    >>> GraphDAG(ttpm.causal_matrix, true_causal_matrix)
+    >>> plot_causal_graph(ttpm.causal_matrix, true_causal_matrix)
     # calculate accuracy
-    >>> ret_metrix = MetricsDAG(ttpm.causal_matrix, true_causal_matrix)
-    >>> ret_metrix.metrics
+    >>> ret_metrix = StructureMetrics(ttpm.causal_matrix, true_causal_matrix)
+    >>> ret_metrix.values
     """
 
     def __init__(self, topology_matrix, delta=0.1, epsilon=1,
-                 max_hop=0, penalty='BIC', max_iter=20, priori_knowledge=None):
+                 max_hop=0, penalty='BIC', iterations=20, prior_knowledge=None):
         BaseLearner.__init__(self)
-        assert isinstance(topology_matrix, np.ndarray),\
+        assert isinstance(topology_matrix, np.ndarray), \
             'topology_matrix should be np.matrix object'
-        assert topology_matrix.ndim == 2,\
+        assert topology_matrix.ndim == 2, \
             'topology_matrix should be two dimension'
-        assert topology_matrix.shape[0] == topology_matrix.shape[1],\
+        assert topology_matrix.shape[0] == topology_matrix.shape[1], \
             'The topology_matrix should be square.'
-        self._topo = nx.Graph(topology_matrix)
+        self._topo = nx.from_numpy_array(topology_matrix,
+                                          create_using=nx.Graph)
         # initialize instance variables
         self._penalty = penalty
         self._delta = delta
         self._max_hop = max_hop
         self._epsilon = epsilon
-        self._max_iter = max_iter
-        self.priori_knowledge = priori_knowledge
+        self._iterations = iterations
+        self.prior_knowledge = prior_knowledge
 
     def learn(self, tensor, *args, **kwargs):
         """
@@ -158,12 +162,12 @@ class TTPM(BaseLearner):
         self._ne_grouped = self.tensor.groupby('node')
 
         self._decay_effects = np.zeros(
-            [len(self._event_names), self._max_hop+1])  # will be used in EM.
+            [len(self._event_names), self._max_hop + 1])  # will be used in EM.
 
         self._max_s_t = tensor['timestamp'].max()
         self._min_s_t = tensor['timestamp'].min()
 
-        for k in range(self._max_hop+1):
+        for k in range(self._max_hop + 1):
             self._decay_effects[:, k] = tensor.groupby('event').apply(
                 lambda i: ((((1 - np.exp(
                     -self._delta * (self._max_s_t - i['timestamp']))) / self._delta)
@@ -171,9 +175,9 @@ class TTPM(BaseLearner):
                     lambda j: len(self._k_hop_neibors(j, k)))).sum())
         # |V|x|T|
         self._T = (self._max_s_t - self._min_s_t) * len(tensor['node'].unique())
-        # Initialize PrioriKnowledge with number of nodes if None was passed
-        if self.priori_knowledge is None:
-            self.priori_knowledge = PrioriKnowledge(n_nodes=self._N)
+        # Initialize PriorKnowledge with number of nodes if None was passed
+        if self.prior_knowledge is None:
+            self.prior_knowledge = PriorKnowledge(n_nodes=self._N)
     def _k_hop_neibors(self, node, k):
 
         if k == 0:
@@ -222,11 +226,11 @@ class TTPM(BaseLearner):
         self._get_effect_tensor_decays()
         # Initialize the adjacency matrix
         edge_mat = np.eye(self._N, self._N)
-        edge_mat[self.priori_knowledge.matrix == 1] = 1 # only add the required edges to edge_mat
+        edge_mat[self.prior_knowledge.matrix == 1] = 1 # only add the required edges to edge_mat
         result = self._em(edge_mat)
         l_ret = result[0]
-        
-        for num_iter in range(self._max_iter):
+
+        for num_iter in range(self._iterations):
 
             logging.info('[iter {}]: likelihood_score = {}'.format(num_iter, l_ret))
 
@@ -245,15 +249,15 @@ class TTPM(BaseLearner):
 
             if stop_tag:
                 return result, edge_mat
-        
+
         return result, edge_mat
 
     def _get_effect_tensor_decays(self):
 
-        self._effect_tensor_decays = np.zeros([self._max_hop+1,
+        self._effect_tensor_decays = np.zeros([self._max_hop + 1,
                                                len(self.tensor),
                                                len(self._event_names)])
-        for k in range(self._max_hop+1):
+        for k in range(self._max_hop + 1):
             self._get_effect_tensor_decays_each_hop(k)
 
     def _get_effect_tensor_decays_each_hop(self, k):
@@ -277,7 +281,7 @@ class TTPM(BaseLearner):
                     neighbors_table = neighbors_table.sort_values(
                         'timestamp')
                     neighbors_table_value = neighbors_table.values
-                except ValueError as e:
+                except ValueError:
                     k_hop_neighbors_ne = []
 
                 if len(k_hop_neighbors_ne) == 0:
@@ -287,9 +291,8 @@ class TTPM(BaseLearner):
                 (np.min((last_start_t - start_t, 0))) * self._delta)
             while 1:
                 try:
-                    nei_sub_n, nei_start_t, nei_ala_i, nei_times \
-                        = neighbors_table_value[j, :]
-                except:
+                    nei_sub_n, nei_start_t, nei_ala_i, nei_times = neighbors_table_value[j, :]
+                except IndexError:
                     break
                 if nei_start_t < start_t:
                     cur_effect[int(nei_ala_i)] += nei_times * np.exp(
@@ -318,7 +321,8 @@ class TTPM(BaseLearner):
         events vector: the exogenous base intensity of each event.
         """
 
-        causal_g = nx.DiGraph((edge_mat - np.eye(self._N, self._N)))
+        causal_g = nx.from_numpy_array((edge_mat - np.eye(self._N, self._N)),
+                                        create_using=nx.DiGraph)
 
         if not nx.is_directed_acyclic_graph(causal_g):
             return -100000000000000, \
@@ -326,7 +330,7 @@ class TTPM(BaseLearner):
                    np.zeros(len(self._event_names))
 
         # Initialize alpha:(nxn)，mu:(nx1) and L
-        alpha = np.ones([self._max_hop+1, len(self._event_names),
+        alpha = np.ones([self._max_hop + 1, len(self._event_names),
                          len(self._event_names)])
         alpha = alpha * edge_mat
         mu = np.ones(len(self._event_names))
@@ -346,7 +350,7 @@ class TTPM(BaseLearner):
 
                 # Calculate the second part of the likelihood
                 lambda_for_i = np.zeros(len(self.tensor)) + mu[i]
-                for k in range(self._max_hop+1):
+                for k in range(self._max_hop + 1):
                     lambda_for_i += np.matmul(
                         self._effect_tensor_decays[k, :],
                         alpha[k, :, i].T)
@@ -368,7 +372,7 @@ class TTPM(BaseLearner):
                 mu[i] = ((mu[i] / lambda_for_i) * x_i).sum() / self._T
                 # update alpha
                 for j in pa_i:
-                    for k in range(self._max_hop+1):
+                    for k in range(self._max_hop + 1):
                         upper = ((alpha[k, j, i] * (
                             self._effect_tensor_decays[k, :, j])[ind]
                                   / lambda_for_i) * x_i).sum()
@@ -382,23 +386,23 @@ class TTPM(BaseLearner):
         if self._penalty == 'AIC':
             return l_init - (len(self._event_names)
                              + self._epsilon * edge_mat.sum()
-                             * (self._max_hop+1)), alpha, mu
+                             * (self._max_hop + 1)), alpha, mu
         elif self._penalty == 'BIC':
             return l_init - (len(self._event_names)
                              + self._epsilon * edge_mat.sum()
-                             * (self._max_hop+1)) * np.log(
+                             * (self._max_hop + 1)) * np.log(
                 self.tensor['times'].sum()) / 2, alpha, mu
         else:
             raise ValueError("The penalty's value should be BIC or AIC.")
 
     def _one_step_change_iterator(self, edge_mat):
 
-        return map(lambda e: self._one_step_change(edge_mat, e, self.priori_knowledge),
+        return map(lambda e: self._one_step_change(edge_mat, e, self.prior_knowledge),
                    product(range(len(self._event_names)),
                            range(len(self._event_names))))
 
     @staticmethod
-    def _one_step_change(edge_mat, e, priori_knowledge):
+    def _one_step_change(edge_mat, e, prior_knowledge):
         """
         Changes the edge value in the edge_mat.
 
@@ -407,7 +411,7 @@ class TTPM(BaseLearner):
         edge_mat: np.ndarray
             Adjacency matrix.
         e: tuple_like (j,i)
-        priori_knowledge: PrioriKnowledge
+        prior_knowledge: PriorKnowledge
 
         Returns
         -------
@@ -415,7 +419,7 @@ class TTPM(BaseLearner):
             new value of edge
         """
         j, i = e
-        if j == i or priori_knowledge.is_required(j, i) or priori_knowledge.is_forbidden(j, i):
+        if j == i or prior_knowledge.is_required(j, i) or prior_knowledge.is_forbidden(j, i):
             return edge_mat
         new_edge_mat = edge_mat.copy()
 
@@ -423,7 +427,7 @@ class TTPM(BaseLearner):
             new_edge_mat[j, i] = 0
             return new_edge_mat
         else:
-            if priori_knowledge.is_required(i, j):
+            if prior_knowledge.is_required(i, j):
                 return new_edge_mat
             new_edge_mat[j, i] = 1
             new_edge_mat[i, j] = 0

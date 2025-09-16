@@ -27,10 +27,10 @@ class BilinearDecoder(nn.Module):
 
         super().__init__()
 
-        self.batch_size = batch_size    # batch size
-        self.max_length = max_length    # input sequence length (number of cities)
+        self.batch_size = batch_size  # batch size
+        self.max_length = max_length  # input sequence length (number of cities)
         self.input_dimension = hidden_dim
-        self.input_embed = hidden_dim    # dimension of embedding space (actor)
+        self.input_embed = hidden_dim  # dimension of embedding space (actor)
         self.use_bias = use_bias
         self.bias_initial_value = bias_initial_value
         self.use_bias_constant = use_bias_constant
@@ -59,11 +59,11 @@ class BilinearDecoder(nn.Module):
 
         W = self._W
 
-        logits = torch.einsum('ijk, kn, imn->ijm', encoder_output, W, encoder_output)    # Readability
+        logits = torch.einsum('ijk, kn, imn->ijm', encoder_output, W, encoder_output)  # Readability
 
-        self.logit_bias =  self._l
+        self.logit_bias = self._l
 
-        if self.use_bias:    # Bias to control sparsity/density
+        if self.use_bias:  # Bias to control sparsity/density
             logits += self.logit_bias
 
         self.adj_prob = logits
@@ -74,7 +74,6 @@ class BilinearDecoder(nn.Module):
         self.entropy = []
 
         for i in range(self.max_length):
-
             position = torch.ones([encoder_output.shape[0]],
                                   device=self.device) * i
             position = position.long()
@@ -83,11 +82,11 @@ class BilinearDecoder(nn.Module):
             self.mask = torch.zeros((encoder_output.shape[0], self.max_length),
                                     device=self.device).scatter_(1, position.view(encoder_output.shape[0], 1), 1)
 
-            masked_score = self.adj_prob[:,i,:] - 100000000.*self.mask
+            masked_score = self.adj_prob[:, i, :] - 100000000. * self.mask
             prob = distr.Bernoulli(logits=masked_score)  # probs input probability, logit input log_probability
 
             sampled_arr = prob.sample()  # Batch_size, seqlenght for just one node
-            sampled_arr.requires_grad=True
+            sampled_arr.requires_grad = True
 
             self.samples.append(sampled_arr)
             self.mask_scores.append(masked_score)
@@ -103,8 +102,8 @@ class NTNDecoder(nn.Module):
                  bias_initial_value, use_bias_constant, is_train, device=None):
         super().__init__()
 
-        self.batch_size = batch_size    # batch size
-        self.max_length = max_length    # input sequence length (number of cities)
+        self.batch_size = batch_size  # batch size
+        self.max_length = max_length  # input sequence length (number of cities)
         self.input_dimension = hidden_dim
         self.input_embed = hidden_dim  # dimension of embedding space (actor)
         self.max_length = max_length
@@ -116,12 +115,13 @@ class NTNDecoder(nn.Module):
         self.is_training = is_train
         self.device = device
 
-        if self.decoder_activation == 'tanh':    # Original implementation by paper
+        if self.decoder_activation == 'tanh':  # Original implementation by paper
             self.activation = nn.Tanh()
         elif self.decoder_activation == 'relu':
             self.activation = nn.ReLU()
 
-        self._w = nn.Parameter(torch.Tensor(*(self.input_embed, self.input_embed, self.decoder_hidden_dim)).to(self.device))
+        self._w = nn.Parameter(
+            torch.Tensor(*(self.input_embed, self.input_embed, self.decoder_hidden_dim)).to(self.device))
         self._wl = nn.Parameter(torch.Tensor(*(self.input_embed, self.decoder_hidden_dim)).to(self.device))
         self._wr = nn.Parameter(torch.Tensor(*(self.input_embed, self.decoder_hidden_dim)).to(self.device))
         self._u = nn.Parameter(torch.Tensor(*(self.decoder_hidden_dim, 1)).to(self.device))
@@ -167,11 +167,11 @@ class NTNDecoder(nn.Module):
         # Compute bilinear product with shape (batch_size, max_length, max_length, decoder_hidden_dim)
         bilinear_product = torch.einsum('ijk, knl, imn->ijml', encoder_output, W, encoder_output)
 
-        if self.decoder_activation == 'tanh':    # Original implementation by paper
+        if self.decoder_activation == 'tanh':  # Original implementation by paper
             final_sum = self.activation(bilinear_product + linear_sum + B.view(self.decoder_hidden_dim))
         elif self.decoder_activation == 'relu':
             final_sum = self.activation(bilinear_product + linear_sum + B.view(self.decoder_hidden_dim))
-        elif self.decoder_activation == 'none':    # Without activation function
+        elif self.decoder_activation == 'none':  # Without activation function
             final_sum = bilinear_product + linear_sum + B.view(self.decoder_hidden_dim)
         else:
             raise NotImplementedError('Current decoder activation is not implemented yet')
@@ -180,7 +180,7 @@ class NTNDecoder(nn.Module):
 
         self.logit_bias = self._l
 
-        if self.use_bias:    # Bias to control sparsity/density
+        if self.use_bias:  # Bias to control sparsity/density
             logits += self.logit_bias
 
         self.adj_prob = logits
@@ -198,11 +198,11 @@ class NTNDecoder(nn.Module):
             self.mask = torch.zeros((encoder_output.shape[0], self.max_length),
                                     device=self.device).scatter_(1, position.view(encoder_output.shape[0], 1), 1)
 
-            masked_score = self.adj_prob[:,i,:] - 100000000.*self.mask
+            masked_score = self.adj_prob[:, i, :] - 100000000. * self.mask
             prob = distr.Bernoulli(logits=masked_score)  # probs input probability, logit input log_probability
 
             sampled_arr = prob.sample()  # Batch_size, seqlenght for just one node
-            sampled_arr.requires_grad=True
+            sampled_arr.requires_grad = True
 
             self.samples.append(sampled_arr)
             self.mask_scores.append(masked_score)
@@ -219,10 +219,10 @@ class SingleLayerDecoder(nn.Module):
 
         super().__init__()
 
-        self.batch_size = batch_size    # batch size
-        self.max_length = max_length    # input sequence length (number of cities)
+        self.batch_size = batch_size  # batch size
+        self.max_length = max_length  # input sequence length (number of cities)
         self.input_dimension = input_dimension
-        self.input_embed = input_embed    # dimension of embedding space (actor)
+        self.input_embed = input_embed  # dimension of embedding space (actor)
         self.decoder_hidden_dim = decoder_hidden_dim
         self.decoder_activation = decoder_activation
         self.use_bias = use_bias
@@ -231,7 +231,7 @@ class SingleLayerDecoder(nn.Module):
         self.device = device
         self.is_training = is_train
 
-        if self.decoder_activation == 'tanh':    # Original implementation by paper
+        if self.decoder_activation == 'tanh':  # Original implementation by paper
             self.activation = nn.Tanh()
         elif self.decoder_activation == 'relu':
             self.activation = nn.ReLU()
@@ -269,11 +269,11 @@ class SingleLayerDecoder(nn.Module):
         tiled_l = torch.Tensor.repeat(torch.unsqueeze(dot_l, dim=2), (1, 1, self.max_length, 1))
         tiled_r = torch.Tensor.repeat(torch.unsqueeze(dot_r, dim=1), (1, self.max_length, 1, 1))
 
-        if self.decoder_activation == 'tanh':    # Original implementation by paper
+        if self.decoder_activation == 'tanh':  # Original implementation by paper
             final_sum = self.activation(tiled_l + tiled_r)
         elif self.decoder_activation == 'relu':
             final_sum = self.activation(tiled_l + tiled_r)
-        elif self.decoder_activation == 'none':    # Without activation function
+        elif self.decoder_activation == 'none':  # Without activation function
             final_sum = tiled_l + tiled_r
         else:
             raise NotImplementedError('Current decoder activation is not implemented yet')
@@ -303,11 +303,11 @@ class SingleLayerDecoder(nn.Module):
                                     device=self.device).scatter_(1, position.view(encoder_output.shape[0], 1), 1)
             self.mask = self.mask.to(self.device)
 
-            masked_score = self.adj_prob[:,i,:] - 100000000.*self.mask
+            masked_score = self.adj_prob[:, i, :] - 100000000. * self.mask
             prob = distr.Bernoulli(logits=masked_score)  # probs input probability, logit input log_probability
 
             sampled_arr = prob.sample()  # Batch_size, seqlenght for just one node
-            sampled_arr.requires_grad=True
+            sampled_arr.requires_grad = True
 
             self.samples.append(sampled_arr)
             self.mask_scores.append(masked_score)
@@ -317,14 +317,12 @@ class SingleLayerDecoder(nn.Module):
 
 
 class MultiheadAttention(nn.Module):
-    
-    def __init__(self, input_dimension, num_units=None, device=None):
 
+    def __init__(self, input_dimension, num_units=None, device=None):
         super().__init__()
         self.device = device
 
         # Linear projections
-        # Q_layer = nn.Linear(in_features=input_dimension, out_features=num_units)
         self.Q_layer = nn.Sequential(nn.Linear(in_features=input_dimension,
                                                out_features=num_units),
                                      nn.ReLU()).to(self.device)
@@ -336,25 +334,27 @@ class MultiheadAttention(nn.Module):
                                      nn.ReLU()).to(self.device)
 
         # Normalize
-        self.bn_layer = nn.BatchNorm1d(input_dimension).to(self.device)  # 传入通道数
+        self.bn_layer = nn.BatchNorm1d(input_dimension).to(self.device)  # Number of incoming channels
 
     def forward(self, inputs, num_heads=16, dropout_rate=0.1, is_training=True):
-
         input_dimension = inputs.shape[1]
-        inputs = inputs.permute(0,2,1)
+        inputs = inputs.permute(0, 2, 1)
 
         Q = self.Q_layer(inputs)  # [batch_size, seq_length, n_hidden]
         K = self.K_layer(inputs)  # [batch_size, seq_length, n_hidden]
         V = self.V_layer(inputs)  # [batch_size, seq_length, n_hidden]
 
         # Split and concat
-        Q_ = torch.cat(torch.split(Q, int(input_dimension/num_heads), dim=2), dim=0)  # [batch_size, seq_length, n_hidden/num_heads]
-        K_ = torch.cat(torch.split(K, int(input_dimension/num_heads), dim=2), dim=0)  # [batch_size, seq_length, n_hidden/num_heads]
-        V_ = torch.cat(torch.split(V, int(input_dimension/num_heads), dim=2), dim=0)  # [batch_size, seq_length, n_hidden/num_heads]
+        Q_ = torch.cat(torch.split(Q, int(input_dimension / num_heads), dim=2),
+                       dim=0)  # [batch_size, seq_length, n_hidden/num_heads]
+        K_ = torch.cat(torch.split(K, int(input_dimension / num_heads), dim=2),
+                       dim=0)  # [batch_size, seq_length, n_hidden/num_heads]
+        V_ = torch.cat(torch.split(V, int(input_dimension / num_heads), dim=2),
+                       dim=0)  # [batch_size, seq_length, n_hidden/num_heads]
 
         # Multiplication
         outputs = torch.matmul(Q_, K_.permute([0, 2, 1]))  # num_heads*[batch_size, seq_length, seq_length]
-        
+
         # Scale
         outputs = outputs / (K_.shape[-1] ** 0.5)
 
@@ -366,27 +366,29 @@ class MultiheadAttention(nn.Module):
 
         # Weighted sum
         outputs = torch.matmul(outputs, V_)  # num_heads*[batch_size, seq_length, n_hidden/num_heads]
-        
+
         # Restore shape
-        outputs = torch.cat(torch.split(outputs, int(outputs.shape[0]/num_heads), dim=0), dim=2)  # [batch_size, seq_length, n_hidden]
-        
+        outputs = torch.cat(torch.split(outputs, int(outputs.shape[0] / num_heads), dim=0),
+                            dim=2)  # [batch_size, seq_length, n_hidden]
+
         # Residual connection
         outputs = outputs + inputs  # [batch_size, seq_length, n_hidden]
 
-        outputs = outputs.permute(0,2,1)
-        
+        outputs = outputs.permute(0, 2, 1)
+
         # Normalize
         outputs = self.bn_layer(outputs)  # [batch_size, seq_length, n_hidden]
 
         return outputs
 
 
-# Apply point-wise feed forward net to a 3d tensor with shape [batch_size, seq_length, n_hidden]
-# Returns: a 3d tensor with the same shape and dtype as inputs
 class FeedForward(nn.Module):
+    """
+    Apply point-wise feed forward net to a 3d tensor with shape [batch_size, seq_length, n_hidden]
+    Returns: a 3d tensor with the same shape and dtype as inputs
+    """
 
     def __init__(self, num_units=(2048, 512), device=None):
-
         super().__init__()
         self.device = device
 
@@ -403,9 +405,7 @@ class FeedForward(nn.Module):
 
         self.bn_layer = nn.BatchNorm1d(num_units[1]).to(self.device)  # 传入通道数
 
-
     def forward(self, inputs):
-
         outputs = self.conv1(inputs)
         outputs = F.relu(outputs)
         outputs = self.conv2(outputs)
@@ -420,7 +420,7 @@ class FeedForward(nn.Module):
 
 
 class TransformerDecoder(nn.Module):
- 
+
     def __init__(self, batch_size, max_length, hidden_dim,
                  num_heads, num_stacks, is_train, device=None):
 
@@ -428,7 +428,6 @@ class TransformerDecoder(nn.Module):
 
         self.batch_size = batch_size  # batch size
         self.max_length = max_length  # input sequence length (number of cities)
-        # input_dimension*2+1 # dimension of input, multiply 2 for expanding dimension to input complex value to tf, add 1 high priority token, 1 pointing
         self.input_dimension = hidden_dim
         self.input_embed = hidden_dim  # dimension of embedding space (actor)
         self.num_heads = num_heads
@@ -436,9 +435,7 @@ class TransformerDecoder(nn.Module):
         self.device = device
         self.is_training = is_train
 
-        # self._emb_params = LayerParams(self, 'emb', self.device)
         self.emb = nn.Parameter(torch.Tensor(*(1, self.input_embed, self.input_embed)).to(self.device))
-
         self.reset_parameters()
 
         # Batch Normalization
@@ -464,18 +461,18 @@ class TransformerDecoder(nn.Module):
 
     def forward(self, inputs):
 
-        inputs = inputs.permute(0,2,1)
- 
+        inputs = inputs.permute(0, 2, 1)
+
         # Embed input sequence
         W_embed = self.emb
-        W_embed_ = W_embed.permute(2,1,0)
+        W_embed_ = W_embed.permute(2, 1, 0)
         self.embedded_input = F.conv1d(inputs, W_embed_, stride=1)
 
         # Batch Normalization
         self.enc = self.bn_layer(self.embedded_input)
-        
+
         # Blocks
-        for i in range(self.num_stacks): # num blocks
+        for i in range(self.num_stacks):  # num blocks
             ### Multihead Attention
             self.enc = self.multihead_attention(self.enc,
                                                 num_heads=self.num_heads,
@@ -487,7 +484,7 @@ class TransformerDecoder(nn.Module):
 
         # Readout layer
         self.adj_prob = self.conv1(self.enc)
-        self.adj_prob = self.adj_prob.permute(0,2,1)
+        self.adj_prob = self.adj_prob.permute(0, 2, 1)
 
         ########################################
         ########## Initialize process ##########
@@ -498,7 +495,7 @@ class TransformerDecoder(nn.Module):
         self.entropy = []
         self.samples = []
 
-        inputs = inputs.permute(0,2,1)
+        inputs = inputs.permute(0, 2, 1)
         for i in range(self.max_length):
             position = torch.ones([inputs.shape[0]], device=self.device) * i
             position = position.long()
@@ -506,11 +503,11 @@ class TransformerDecoder(nn.Module):
             self.mask = torch.zeros((inputs.shape[0], self.max_length),
                                     device=self.device).scatter_(1, position.view(inputs.shape[0], 1), 1)
 
-            masked_score = self.adj_prob[:,i,:] - 100000000.*self.mask
+            masked_score = self.adj_prob[:, i, :] - 100000000. * self.mask
             prob = distr.Bernoulli(logits=masked_score)  # probs input probability, logit input log_probability
 
             sampled_arr = prob.sample()  # Batch_size, seqlenght for just one node
-            sampled_arr.requires_grad=True
+            sampled_arr.requires_grad = True
 
             self.samples.append(sampled_arr)
             self.mask_scores.append(masked_score)

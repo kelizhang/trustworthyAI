@@ -26,8 +26,6 @@ class EpisodicCritic(nn.Module):
         super(EpisodicCritic, self).__init__()
         self.input_dim = input_dim
         self.neurons = neurons
-        self.output_dim = neurons[-1]
-        self.hidden_units = neurons[:-1]
         self.activation = activation
         self.device = device
 

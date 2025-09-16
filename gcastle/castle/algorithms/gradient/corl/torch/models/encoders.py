@@ -29,15 +29,15 @@ class LSTMEncoder(BaseEncoder):
         Number of features of input.
     embed_dim: int
         Number of features of hidden layer.
+    device: option, default: None
+        torch.device('cpu') or torch.device('cuda').
     """
 
     def __init__(self, input_dim, embed_dim, device=None) -> None:
         super(LSTMEncoder, self).__init__(input_dim=input_dim,
                                           embed_dim=embed_dim,
                                           device=device)
-        self.input_dim = input_dim
         self.hidden_dim = embed_dim
-        self.device = device
         self.lstm = nn.LSTM(input_size=self.hidden_dim,
                             hidden_size=self.hidden_dim,
                             num_layers=1,
@@ -70,13 +70,9 @@ class MLPEncoder(BaseEncoder):
     def __init__(self, input_dim, embed_dim, hidden_dim,
                  device=None) -> None:
         super(MLPEncoder, self).__init__(input_dim=input_dim,
-                                         embed_dim=embed_dim,
+                                         embed_dim=embed_dim,  # also is output_dim
                                          hidden_dim=hidden_dim,
                                          device=device)
-        self.input_dim = input_dim
-        self.embed_dim = embed_dim  # also is output_dim
-        self.hidden_dim = hidden_dim
-        self.device = device
 
     def forward(self, x) -> torch.Tensor:
         x = x.permute(0, 2, 1)
@@ -93,17 +89,12 @@ class TransformerEncoder(BaseEncoder):
     def __init__(self, input_dim, embed_dim, hidden_dim,
                  heads=8, blocks=3, device=None) -> None:
         super(TransformerEncoder, self).__init__(input_dim=input_dim,
-                                                 embed_dim=embed_dim,
+                                                 embed_dim=embed_dim,  # also is output_dim
                                                  hidden_dim=hidden_dim,
                                                  device=device)
-        self.input_dim = input_dim
-        self.heads = heads
-        self.embed_dim = embed_dim  # also is output_dim
-        self.hidden_dim = hidden_dim
         self.blocks = blocks
-        self.device = device
         self.attention = MultiHeadAttention(input_dim=embed_dim,
-                                            output_dim=embed_dim,
+                                            output_dim=embed_dim,  # also is output_dim
                                             heads=heads,
                                             dropout_rate=0.0,
                                             device=device)
@@ -111,7 +102,7 @@ class TransformerEncoder(BaseEncoder):
     def forward(self, x) -> torch.Tensor:
         x = x.permute(0, 2, 1)
         output = self.embedding(x).permute(0, 2, 1)
-        for i in range(self.blocks):
+        for _ in range(self.blocks):
             enc = self.attention(output)
             enc = enc.permute(0, 2, 1)
             output = self.feedforward_conv1d(enc)
@@ -136,17 +127,15 @@ class MultiHeadAttention(nn.Module):
     dropout_rate: float, int
         If not 0, append `Dropout` layer on the outputs of each LSTM layer
         except the last layer. Default 0. The range of dropout is (0.0, 1.0).
-
+    device: option, default: None
+        torch.device('cpu') or torch.device('cuda').
     """
 
     def __init__(self, input_dim, output_dim, heads=8, dropout_rate=0.1,
                  device=None) -> None:
         super(MultiHeadAttention, self).__init__()
-        self.input_dim = input_dim
-        self.output_dim = output_dim
         self.heads = heads
         self.dropout_rate = dropout_rate
-        self.device = device
 
         self.w_q = nn.Sequential(
             nn.Linear(in_features=input_dim,

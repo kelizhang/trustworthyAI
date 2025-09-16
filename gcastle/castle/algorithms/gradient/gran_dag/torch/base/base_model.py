@@ -26,7 +26,7 @@ class BaseModel(nn.Module):
     """Base class of LearnableModel, disable instantiation."""
 
     def __init__(self, input_dim, hidden_num, hidden_dim, output_dim,
-                 nonlinear="leaky-relu", norm_prod='paths', square_prod=False):
+                 nonlinear="leaky-relu", norm_prod='paths', square_prod=False, device=None):
 
         super(BaseModel, self).__init__()
         self.input_dim = input_dim
@@ -36,15 +36,14 @@ class BaseModel(nn.Module):
         self.nonlinear = nonlinear
         self.norm_prod = norm_prod
         self.square_prod = square_prod
-
+        self.device = device
         self.weights = nn.ParameterList()
         self.biases = nn.ParameterList()
         self.extra_params = []
         # Those parameter might be learnable, but they do not depend on parents.
 
         # initialize current adjacency matrix
-        self.adjacency = torch.ones((self.input_dim, self.input_dim)) - \
-                         torch.eye(self.input_dim)
+        self.adjacency = (torch.ones((self.input_dim, self.input_dim)) - torch.eye(self.input_dim)).to(self.device)
 
         self.zero_weights_ratio = 0.
         self.numel_weights = 0
@@ -60,10 +59,10 @@ class BaseModel(nn.Module):
             out_dim = layer_list[i + 1]
             self.weights.append(nn.Parameter(torch.zeros(self.input_dim,
                                                          out_dim,
-                                                         in_dim),
+                                                         in_dim, device=self.device),
                                              requires_grad=True))
             self.biases.append(nn.Parameter(torch.zeros(self.input_dim,
-                                                        out_dim),
+                                                        out_dim, device=self.device),
                                             requires_grad=True))
             self.numel_weights += self.input_dim * out_dim * in_dim
 
@@ -193,7 +192,7 @@ class BaseModel(nn.Module):
             corresponding dicts of parameters
         """
 
-        grad_norm = torch.zeros(1)
+        grad_norm = torch.zeros(1, device=self.device)
 
         if 'w' in mode:
             for w in self.weights:
@@ -224,14 +223,16 @@ class LearnableModel(BaseModel):
                  output_dim,
                  nonlinear="leaky-relu",
                  norm_prod='paths',
-                 square_prod=False):
+                 square_prod=False,
+                 device=None):
         super(LearnableModel, self).__init__(input_dim=input_dim,
                                              hidden_num=hidden_num,
                                              hidden_dim=hidden_dim,
                                              output_dim=output_dim,
                                              nonlinear=nonlinear,
                                              norm_prod=norm_prod,
-                                             square_prod=square_prod)
+                                             square_prod=square_prod,
+                                             device=device)
 
         self.reset_params()
 
@@ -306,14 +307,16 @@ class NonlinearGauss(LearnableModel):
                  output_dim,
                  nonlinear="leaky-relu",
                  norm_prod='paths',
-                 square_prod=False):
+                 square_prod=False,
+                 device=None):
         super(NonlinearGauss, self).__init__(input_dim=input_dim,
                                              hidden_num=hidden_num,
                                              hidden_dim=hidden_dim,
                                              output_dim=output_dim,
                                              nonlinear=nonlinear,
                                              norm_prod=norm_prod,
-                                             square_prod=square_prod)
+                                             square_prod=square_prod,
+                                             device=device)
 
     def get_distribution(self, dp):
         return distributions.normal.Normal(dp[0], torch.exp(dp[1]))
@@ -344,14 +347,16 @@ class NonlinearGaussANM(LearnableModel):
                  output_dim,
                  nonlinear="leaky-relu",
                  norm_prod='paths',
-                 square_prod=False):
+                 square_prod=False,
+                 device=None):
         super(NonlinearGaussANM, self).__init__(input_dim=input_dim,
                                                 hidden_num=hidden_num,
                                                 hidden_dim=hidden_dim,
                                                 output_dim=output_dim,
                                                 nonlinear=nonlinear,
                                                 norm_prod=norm_prod,
-                                                square_prod=square_prod)
+                                                square_prod=square_prod,
+                                                device=device)
         # extra parameters are log_std
         extra_params = np.ones((self.input_dim,))
         np.random.shuffle(extra_params)
@@ -362,7 +367,7 @@ class NonlinearGaussANM(LearnableModel):
             self.extra_params.append(
                 nn.Parameter(
                     torch.tensor(
-                        np.log(extra_param).reshape(1)).type(torch.Tensor),
+                        np.log(extra_param).reshape(1), device=self.device),
                     requires_grad=True))
 
     def get_distribution(self, dp):

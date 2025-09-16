@@ -14,5 +14,6 @@
 # limitations under the License.
 
 from .base import BaseLearner
+from .base import GradientBasedLearner
 from .base import Tensor
-from .plot_dag import GraphDAG
+from .plot import GraphDAG, plot_causal_graph

@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import logging
 from tqdm import tqdm
 import platform
@@ -22,19 +21,20 @@ import numpy as np
 
 from .data_loader import DataGenerator_read_data
 from .models import Actor
-from .rewards import get_Reward
-from .helpers.torch_utils import set_seed
+from .rewards import GetReward
 from .helpers.lambda_utils import BIC_lambdas
 from .helpers.analyze_utils import convert_graph_int_to_adj_mat, \
     graph_prunned_by_coef, graph_prunned_by_coef_2nd
 
-from castle.common import BaseLearner, Tensor
-from castle.metrics import MetricsDAG
+from castle.common import GradientBasedLearner, Tensor
+from castle.metrics import StructureMetrics
 from castle.common.consts import RL_VALID_PARAMS
 from castle.common.validator import check_args_value
+from castle.common.class_factory import ClassFactory
 
 
-class RL(BaseLearner):
+@ClassFactory.algorithms.register()
+class RL(GradientBasedLearner):
     """
     RL Algorithm.
     A RL-based algorithm that can work with flexible score functions (including non-smooth ones).
@@ -52,9 +52,10 @@ class RL(BaseLearner):
     residual: bool
         whether to use residual for gat encoder
     decoder_type: str
-        type of decoder used
+        type of decoder used, ['SingleLayerDecoder', 'TransformerDecoder',
+        'BilinearDecoder', 'NTNDecoder']
     decoder_activation: str
-        activation for decoder
+        activation for decoder, ['tanh', 'relu', 'none']
     decoder_hidden_dim: int
         hidden dimension for decoder
     use_bias: bool
@@ -72,30 +73,25 @@ class RL(BaseLearner):
     transpose: bool
         whether the true graph needs transposed
     score_type: str
-        score functions
+        score functions, ['BIC', 'BIC_different_var']
     reg_type: str
-        regressor type (in combination wth score_type)
+        regressor type (in combination wth score_type), ['LR', 'QR']
     lambda_iter_num: int
         how often to update lambdas
     lambda_flag_default: bool
         with set lambda parameters; true with default strategy and ignore input bounds
     score_bd_tight: bool
         if bound is tight, then simply use a fixed value, rather than the adaptive one
-    lambda1_update: float
-        increasing additive lambda1
+
     lambda2_update: float
         increasing  multiplying lambda2
     score_lower: float
         lower bound on lambda1
     score_upper: float
         upper bound on lambda1
-    lambda2_lower: float
-        lower bound on lambda2
-    lambda2_upper: float
-        upper bound on lambda2
     seed: int
         seed
-    nb_epoch: int
+    iterations: int
         nb epoch
     lr1_start: float
         actor learning rate
@@ -107,20 +103,10 @@ class RL(BaseLearner):
         update factor moving average baseline
     init_baseline: float
         initial baseline - REINFORCE
-    temperature: float
-        pointer_net initial temperature
-    C: float
-        pointer_net tan clipping
     l1_graph_reg: float
         L1 graph regularization to encourage sparsity
-    inference_mode: bool
-        switch to inference mode when model is trained
     verbose: bool
         print detailed logging or not
-    device_type: str
-        whether to use GPU or not
-    device_ids: int
-        choose which gpu to use
 
     Attributes
     ----------
@@ -133,53 +119,55 @@ class RL(BaseLearner):
 
     Examples
     --------
+    >>> import castle
+    >>> castle.set_backend('pytorch')
     >>> from castle.algorithms import RL
     >>> from castle.datasets import load_dataset
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
     >>> X, true_dag, _ = load_dataset('IID_Test')
-    >>> n = RL()
-    >>> n.learn(X, dag=true_dag)
-    >>> GraphDAG(n.causal_matrix, true_dag)
-    >>> met = MetricsDAG(n.causal_matrix, true_dag)
-    >>> print(met.metrics)
+    >>> algo = RL()
+    # If you want to use GPU, you can call CORL().set_context() like the following code:
+    >>> algo.set_context(device_target='GPU') # 'GPU', 'CPU' or 'Ascend'
+    >>> algo.learn(X)
+    >>> plot_causal_graph(algo.causal_matrix, true_dag)
+    >>> met = StructureMetrics(algo.causal_matrix, true_dag)
+    >>> print(met.values)
     """
 
     @check_args_value(RL_VALID_PARAMS)
-    def __init__(self, encoder_type='TransformerEncoder', 
-                 hidden_dim=64, 
+    def __init__(self, encoder_type='TransformerEncoder',
+                 hidden_dim=64,
                  num_heads=16,
-                 num_stacks=6, 
-                 residual=False, 
-                 decoder_type='SingleLayerDecoder', 
-                 decoder_activation='tanh', 
-                 decoder_hidden_dim=16, 
-                 use_bias=False, 
-                 use_bias_constant=False, 
-                 bias_initial_value=False, 
-                 batch_size=64, 
-                 input_dimension=64, 
-                 normalize=False, 
-                 transpose=False, 
-                 score_type='BIC', 
-                 reg_type='LR', 
-                 lambda_iter_num=1000, 
-                 lambda_flag_default=True, 
+                 num_stacks=6,
+                 residual=False,
+                 decoder_type='SingleLayerDecoder',
+                 decoder_activation='tanh',
+                 decoder_hidden_dim=16,
+                 use_bias=False,
+                 use_bias_constant=False,
+                 bias_initial_value=False,
+                 batch_size=64,
+                 input_dimension=64,
+                 normalize=False,
+                 transpose=False,
+                 score_type='BIC',
+                 reg_type='LR',
+                 lambda_iter_num=100,
+                 lambda_flag_default=True,
                  score_bd_tight=False,
-                 lambda2_update=10, 
-                 score_lower=0.0, 
+                 lambda2_update=10,
+                 score_lower=0.0,
                  score_upper=0.0,
-                 seed=8, 
-                 nb_epoch=20000, 
+                 seed=8,
+                 iterations=100,
                  lr1_start=0.001,
-                 lr1_decay_step=5000, 
-                 lr1_decay_rate=0.96, 
-                 alpha=0.99, 
+                 lr1_decay_step=100,
+                 lr1_decay_rate=0.96,
+                 alpha=0.99,
                  init_baseline=-1.0,
                  l1_graph_reg=0.0,
-                 verbose=False, 
-                 device_type='cpu', 
-                 device_ids=0):
+                 verbose=False):
 
         super().__init__()
 
@@ -207,7 +195,7 @@ class RL(BaseLearner):
         self.score_lower = score_lower
         self.score_upper = score_upper
         self.seed = seed
-        self.nb_epoch = nb_epoch
+        self.iterations = iterations
         self.lr1_start = lr1_start
         self.lr1_decay_step = lr1_decay_step
         self.lr1_decay_rate = lr1_decay_rate
@@ -215,23 +203,6 @@ class RL(BaseLearner):
         self.init_baseline = init_baseline
         self.l1_graph_reg = l1_graph_reg
         self.verbose = verbose
-        self.device_type = device_type
-        self.device_ids = device_ids
-
-        if torch.cuda.is_available():
-            logging.info('GPU is available.')
-        else:
-            logging.info('GPU is unavailable.')
-            if self.device_type == 'gpu':
-                raise ValueError("GPU is unavailable, "
-                                 "please set device_type = 'cpu'.")
-        if self.device_type == 'gpu':
-            if self.device_ids:
-                os.environ['CUDA_VISIBLE_DEVICES'] = str(self.device_ids)
-            device = torch.device('cuda')
-        else:
-            device = torch.device('cpu')
-        self.device = device
 
     def learn(self, data, columns=None, dag=None, **kwargs):
         """
@@ -250,21 +221,21 @@ class RL(BaseLearner):
 
         self.dag = dag
         X = Tensor(data, columns=columns)
-        
+        X_torch = torch.tensor(X.data, device=self.device)
         self.data_size = X.shape[0]
         self.max_length = X.shape[1]
 
-        causal_matrix = self._rl(X)
-        self.causal_matrix = causal_matrix
+        causal_matrix = self._rl(X_torch)
+        self.causal_matrix = Tensor(causal_matrix, index=X.columns, columns=X.columns)
 
     def _rl(self, X):
         # Reproducibility
-        set_seed(self.seed)
+        self._set_seed(self.seed)
 
         logging.info('Python version is {}'.format(platform.python_version()))
 
         # input data
-        if self.dag :
+        if self.dag:
             training_set = DataGenerator_read_data(
                 X, self.dag, self.normalize, self.transpose)
         else:
@@ -274,21 +245,22 @@ class RL(BaseLearner):
         # set penalty weights
         score_type = self.score_type
         reg_type = self.reg_type
-
+        lambda1_update_add = 0
         if self.lambda_flag_default:
-            sl, su, strue = BIC_lambdas(training_set.inputdata, None, None, None, reg_type, score_type)
+            sl, su, s_true = BIC_lambdas(training_set.input_data, None, None, None, reg_type, score_type)
             lambda1 = 0
             lambda1_upper = 5
             lambda1_update_add = 1
-            lambda2 = 1/(10**(np.round(self.max_length/3)))
+            lambda2 = 1 / (10 ** (np.round(self.max_length / 3)))
             lambda2_upper = 0.01
             lambda2_update_mul = 10
             lambda_iter_num = self.lambda_iter_num
 
             # test initialized score
-            logging.info('Original sl: {}, su: {}, strue: {}'.format(sl, su, strue))
+            logging.info('Original sl: {}, su: {}, s_true: {}'.format(sl, su, s_true))
             logging.info('Transfomed sl: {}, su: {}, lambda2: {}, true: {}'.format(sl, su, lambda2,
-                        (strue-sl)/(su-sl)*lambda1_upper))
+                                                                                   (s_true - sl) / (
+                                                                                           su - sl) * lambda1_upper))
         else:
             # test choices for the case with mannualy provided bounds
             # not fully tested
@@ -301,7 +273,7 @@ class RL(BaseLearner):
                 lambda1 = 0
                 lambda1_upper = 5
                 lambda1_update_add = 1
-            lambda2 = 1/(10**(np.round(self.max_length/3)))
+            lambda2 = 1 / (10 ** (np.round(self.max_length / 3)))
             lambda2_upper = 0.01
             lambda2_update_mul = self.lambda2_update
             lambda_iter_num = self.lambda_iter_num
@@ -327,9 +299,9 @@ class RL(BaseLearner):
                       alpha=self.alpha,
                       init_baseline=self.init_baseline,
                       device=self.device)
-        callreward = get_Reward(self.batch_size, self.max_length,
-                                self.input_dimension, training_set.inputdata,
-                                sl, su, lambda1_upper, score_type, reg_type, 
+        call_reward = GetReward(self.batch_size, self.max_length,
+                                self.input_dimension, training_set.input_data,
+                                sl, su, lambda1_upper, score_type, reg_type,
                                 self.l1_graph_reg, False)
         logging.info('Finished creating training dataset and reward class')
 
@@ -337,25 +309,24 @@ class RL(BaseLearner):
         rewards_avg_baseline = []
         rewards_batches = []
         reward_max_per_batch = []
-        
+
         lambda1s = []
         lambda2s = []
-        
+
         graphss = []
         probsss = []
         max_rewards = []
-        max_reward = float('-inf')
-        max_reward_score_cyc = (lambda1_upper+1, 0)
+        max_reward_score_cyc = (lambda1_upper + 1, 0)
 
         logging.info('Starting training.')
-        
-        for i in tqdm(range(1, self.nb_epoch + 1)):
+
+        for i in tqdm(range(1, self.iterations + 1)):
 
             if self.verbose:
                 logging.info('Start training for {}-th epoch'.format(i))
 
-            input_batch = training_set.train_batch(self.batch_size, self.max_length, self.input_dimension)
-            inputs = torch.from_numpy(np.array(input_batch)).to(self.device)
+            input_batch = training_set.train_batch(self.batch_size,  self.input_dimension)
+            inputs = torch.stack(input_batch)
 
             # Test tensor shape
             if i == 1:
@@ -365,12 +336,11 @@ class RL(BaseLearner):
             actor.build_permutation(inputs)
             graphs_feed = actor.graphs_
 
-            reward_feed = callreward.cal_rewards(graphs_feed.cpu().detach().numpy(), lambda1, lambda2)  # np.array
-            actor.build_reward(reward_ = -torch.from_numpy(reward_feed)[:,0].to(self.device))
-
+            reward_feed = call_reward.cal_rewards(graphs_feed.cpu().detach().numpy(), lambda1, lambda2)  # np.array
+            actor.build_reward(reward_=-torch.tensor(reward_feed)[:, 0].to(self.device).float())
 
             # max reward, max reward per batch
-            max_reward = -callreward.update_scores([max_reward_score_cyc], lambda1, lambda2)[0]
+            max_reward = -call_reward.update_scores([max_reward_score_cyc], lambda1, lambda2)[0]
             max_reward_batch = float('inf')
             max_reward_batch_score_cyc = (0, 0)
 
@@ -378,7 +348,7 @@ class RL(BaseLearner):
                 if reward_ < max_reward_batch:
                     max_reward_batch = reward_
                     max_reward_batch_score_cyc = (score_, cyc_)
-                    
+
             max_reward_batch = -max_reward_batch
 
             if max_reward < max_reward_batch:
@@ -386,19 +356,19 @@ class RL(BaseLearner):
                 max_reward_score_cyc = max_reward_batch_score_cyc
 
             # for average reward per batch
-            reward_batch_score_cyc = np.mean(reward_feed[:,1:], axis=0)
+            reward_batch_score_cyc = np.mean(reward_feed[:, 1:], axis=0)
 
             if self.verbose:
                 logging.info('Finish calculating reward for current batch of graph')
 
             score_test, probs, graph_batch, \
             reward_batch, reward_avg_baseline = \
-                    actor.test_scores, actor.log_softmax, actor.graph_batch, \
-                    actor.reward_batch, actor.avg_baseline
+                actor.test_scores, actor.log_softmax, actor.graph_batch, \
+                actor.reward_batch, actor.avg_baseline
 
             if self.verbose:
                 logging.info('Finish updating actor and critic network using reward calculated')
-            
+
             lambda1s.append(lambda1)
             lambda2s.append(lambda2)
 
@@ -412,34 +382,37 @@ class RL(BaseLearner):
 
             # logging
             if i == 1 or i % 500 == 0:
-                logging.info('[iter {}] reward_batch: {:.4}, max_reward: {:.4}, max_reward_batch: {:.4}'.format(i,
-                            reward_batch, max_reward, max_reward_batch))
+                logging.info('[iter {}] reward_batch: {:.4}, max_reward: {:.4}, max_reward_batch: {:.4}'.format(
+                    i, reward_batch, max_reward, max_reward_batch))
 
             # update lambda1, lamda2
             if i == 1 or i % lambda_iter_num == 0:
-                ls_kv = callreward.update_all_scores(lambda1, lambda2)
+                ls_kv = call_reward.update_all_scores(lambda1, lambda2)
 
                 graph_int, score_min, cyc_min = np.int64(ls_kv[0][0]), ls_kv[0][1][1], ls_kv[0][1][-1]
 
                 if cyc_min < 1e-5:
                     lambda1_upper = score_min
-                lambda1 = min(lambda1+lambda1_update_add, lambda1_upper)
-                lambda2 = min(lambda2*lambda2_update_mul, lambda2_upper)
-                logging.info('[iter {}] lambda1 {:.4}, upper {:.4}, lambda2 {:.4}, upper {:.4}, score_min {:.4}, cyc_min {:.4}'.format(i,
-                            lambda1*1.0, lambda1_upper*1.0, lambda2*1.0, lambda2_upper*1.0, score_min*1.0, cyc_min*1.0))
+                lambda1 = min(lambda1 + lambda1_update_add, lambda1_upper)
+                lambda2 = min(lambda2 * lambda2_update_mul, lambda2_upper)
+                logging.info(
+                    '[iter {}] lambda1 {:.4}, upper {:.4}, lambda2 {:.4}, upper {:.4}, score_min {:.4}, cyc_min {:.4}'.format(
+                        i,
+                        lambda1 * 1.0, lambda1_upper * 1.0, lambda2 * 1.0, lambda2_upper * 1.0, score_min * 1.0,
+                        cyc_min * 1.0))
 
                 graph_batch = convert_graph_int_to_adj_mat(graph_int)
 
                 if reg_type == 'LR':
-                    graph_batch_pruned = np.array(graph_prunned_by_coef(graph_batch, training_set.inputdata))
+                    graph_batch_pruned = np.array(graph_prunned_by_coef(graph_batch, training_set.input_data))
                 elif reg_type == 'QR':
-                    graph_batch_pruned = np.array(graph_prunned_by_coef_2nd(graph_batch, training_set.inputdata))
+                    graph_batch_pruned = np.array(graph_prunned_by_coef_2nd(graph_batch, training_set.input_data))
 
                 if self.dag:
-                    met = MetricsDAG(graph_batch.T, training_set.true_graph)
-                    met2 = MetricsDAG(graph_batch_pruned.T, training_set.true_graph)
-                    acc_est = met.metrics
-                    acc_est2 = met2.metrics
+                    met = StructureMetrics(graph_batch.T, training_set.true_graph)
+                    met2 = StructureMetrics(graph_batch_pruned.T, training_set.true_graph)
+                    acc_est = met.values
+                    acc_est2 = met2.values
 
                     fdr, tpr, fpr, shd, nnz = \
                         acc_est['fdr'], acc_est['tpr'], acc_est['fpr'], \
@@ -447,10 +420,12 @@ class RL(BaseLearner):
                     fdr2, tpr2, fpr2, shd2, nnz2 = \
                         acc_est2['fdr'], acc_est2['tpr'], acc_est2['fpr'], \
                         acc_est2['shd'], acc_est2['nnz']
-                    
-                    logging.info('before pruning: fdr {}, tpr {}, fpr {}, shd {}, nnz {}'.format(fdr, tpr, fpr, shd, nnz))
-                    logging.info('after  pruning: fdr {}, tpr {}, fpr {}, shd {}, nnz {}'.format(fdr2, tpr2, fpr2, shd2, nnz2))
-        
+
+                    logging.info(
+                        'before pruning: fdr {}, tpr {}, fpr {}, shd {}, nnz {}'.format(fdr, tpr, fpr, shd, nnz))
+                    logging.info(
+                        'after  pruning: fdr {}, tpr {}, fpr {}, shd {}, nnz {}'.format(fdr2, tpr2, fpr2, shd2, nnz2))
+
         logging.info('Training COMPLETED !')
 
         return graph_batch_pruned.T

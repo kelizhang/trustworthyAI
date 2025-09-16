@@ -13,15 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import itertools
-import logging
 import torch
 import torch.nn as nn
 import numpy as np
-
-from castle.common import BaseLearner, Tensor
+from tqdm import tqdm
+from castle.common import GradientBasedLearner, Tensor
 from castle.common.independence_tests import hsic_test
+from castle.common.class_factory import ClassFactory
 
 from .utils import batch_loader, compute_jacobian, compute_entropy
 
@@ -51,6 +50,7 @@ class MLP(nn.Module):
             weight = nn.Linear(in_features=input_size,
                                out_features=self.hidden_units,
                                bias=self.bias,
+                               dtype=torch.float,
                                device=self.device)
             mlp.append(weight)
             if self.activation is not None:
@@ -58,6 +58,7 @@ class MLP(nn.Module):
         out_layer = nn.Linear(in_features=self.hidden_units,
                               out_features=self.output_dim,
                               bias=self.bias,
+                              dtype=torch.float,
                               device=self.device)
         mlp.append(out_layer)
 
@@ -70,7 +71,8 @@ class MLP(nn.Module):
         return out
 
 
-class PNL(BaseLearner):
+@ClassFactory.algorithms.register()
+class PNL(GradientBasedLearner):
     """
     On the Identifiability of the Post-Nonlinear Causal Model
 
@@ -86,7 +88,7 @@ class PNL(BaseLearner):
         number of unit of per hidden layer
     batch_size: int
         size of training batch
-    epochs: int
+    iterations: int
         training times on all samples
     lr: float
         learning rate
@@ -96,63 +98,48 @@ class PNL(BaseLearner):
         whether use bias
     activation: callable
         nonlinear activation function
-    device_type: str
-        'cpu' or 'gpu', default: 'cpu'
-    device_ids: int or str
-        e.g. 0 or '0,1', denotes which gpu that you want to use.
 
     Examples
     --------
-    >>> from castle.algorithms.gradient.pnl.torch import PNL
+    >>> import castle
+    >>> castle.set_backend('pytorch')
+    >>> from castle.algorithms import PNL
     >>> from castle.datasets import load_dataset
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
     >>> X, true_dag, _ = load_dataset('IID_Test')
-    >>> n = PNL()
-    >>> n.learn(X)
-    >>> GraphDAG(n.causal_matrix, true_dag)
-    >>> met = MetricsDAG(n.causal_matrix, true_dag)
-    >>> print(met.metrics)
+    >>> algo = PNL()
+    # If you want to use GPU, you can call CORL().set_context() like the following code:
+    >>> algo.set_context(device_target='GPU') # 'GPU', 'CPU' or 'Ascend'
+    >>> algo.learn(X)
+    >>> plot_causal_graph(algo.causal_matrix, true_dag)
+    >>> met = StructureMetrics(algo.causal_matrix, true_dag)
+    >>> print(met.values)
     """
 
     def __init__(self, hidden_layers=1, hidden_units=10, batch_size=64,
-                 epochs=100, lr=1e-4, alpha=0.01, bias=True,
-                 activation=nn.LeakyReLU(), device_type='cpu', device_ids=None):
+                 iterations=100, lr=1e-4, alpha=0.01, bias=True,
+                 activation=nn.LeakyReLU()):
         super(PNL, self).__init__()
         self.hidden_layers = hidden_layers
         self.hidden_units = hidden_units
         self.batch_size = batch_size
-        self.epochs = epochs
+        self.iterations = iterations
         self.lr = lr
         self.alpha = alpha
         self.bias = bias
         self.activation = activation
-        self.device_type = device_type
-        self.device_ids = device_ids
-        if torch.cuda.is_available():
-            logging.info('GPU is available.')
-        else:
-            logging.info('GPU is unavailable.')
-            if self.device_type == 'gpu':
-                raise ValueError("GPU is unavailable, "
-                                 "please set device_type='cpu'.")
-        if self.device_type == 'gpu':
-            if self.device_ids:
-                os.environ['CUDA_VISIBLE_DEVICES'] = str(self.device_ids)
-            device = torch.device('cuda')
-        else:
-            device = torch.device('cpu')
-        self.device = device
 
     def learn(self, data, columns=None, **kwargs):
 
+        data = Tensor(data, columns=columns).data
         n_nodes = data.shape[1]
         g = np.zeros((n_nodes, n_nodes))
-
         all_nodes_pair = itertools.permutations(range(n_nodes), 2)
-        for i, j in all_nodes_pair:
-            x1 = torch.tensor(data[:, i], device=self.device).unsqueeze(-1)
-            x2 = torch.tensor(data[:, j], device=self.device).unsqueeze(-1)
+        progress_bar = tqdm([*all_nodes_pair], disable=False)
+        for i, j in progress_bar:
+            x1 = torch.tensor(data[:, i], dtype=torch.float, device=self.device).unsqueeze(-1)
+            x2 = torch.tensor(data[:, j], dtype=torch.float, device=self.device).unsqueeze(-1)
 
             # initialize model and parameters
             l1 = MLP(input_dim=1, hidden_layers=self.hidden_layers,
@@ -172,7 +159,7 @@ class PNL(BaseLearner):
             # kernel-based independent test
             ind = hsic_test(x1.cpu().detach().numpy(),
                             e2.cpu().detach().numpy(), alpha=self.alpha)
-            if ind == 0:  # x1->x2
+            if ind:  # x1->x2
                 g[i, j] = 1
 
         self.causal_matrix = Tensor(g, index=columns, columns=columns)
@@ -180,7 +167,7 @@ class PNL(BaseLearner):
     def _nonlinear_ica(self, f1, f2, x1, x2, optimizer):
 
         batch_generator = batch_loader(x1, x2, batch_size=self.batch_size)
-        for i in range(self.epochs):
+        for _ in range(self.iterations):
             for x1_batch, x2_batch in batch_generator:
                 optimizer.zero_grad()
 

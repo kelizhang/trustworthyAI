@@ -18,19 +18,19 @@ import numpy as np
 import scipy.linalg as slin
 import scipy.optimize as sopt
 
-from castle.common import BaseLearner, Tensor
+from castle.common import GradientBasedLearner, Tensor
+from castle.common.class_factory import ClassFactory
 
 
-class NotearsLowRank(BaseLearner):
+@ClassFactory.algorithms.register()
+class NotearsLowRank(GradientBasedLearner):
     """
     NotearsLowRank Algorithm.
     Adapting NOTEARS for large problems with low-rank causal graphs.
 
     Parameters
     ----------
-    w_init: None or numpy.ndarray
-        Initialized weight matrix
-    max_iter: int
+    iterations: int
         Maximum number of iterations
     h_tol: float
         exit if |h(w)| <= h_tol
@@ -50,27 +50,24 @@ class NotearsLowRank(BaseLearner):
     
     Examples
     --------
-    >>> import numpy as np
     >>> from castle.algorithms import NotearsLowRank
     >>> from castle.datasets import load_dataset
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
     >>> X, true_dag, _ = load_dataset('IID_Test')
-    >>> rank = np.linalg.matrix_rank(true_dag)
-    >>> n = NotearsLowRank()
-    >>> n.learn(X, rank=rank)
-    >>> GraphDAG(n.causal_matrix, true_dag)
-    >>> met = MetricsDAG(n.causal_matrix, true_dag)
-    >>> print(met.metrics)
+    >>> algo = NotearsLowRank()
+    >>> algo.learn(X)
+    >>> plot_causal_graph(algo.causal_matrix, true_dag)
+    >>> met = StructureMetrics(algo.causal_matrix, true_dag)
+    >>> print(met.values)
     """
     
-    def __init__(self, w_init=None, max_iter=15, h_tol=1e-6, 
+    def __init__(self, iterations=15, h_tol=1e-6,
                  rho_max=1e+20, w_threshold=0.3):
 
         super(NotearsLowRank, self).__init__()
 
-        self.w_init = w_init
-        self.max_iter = max_iter
+        self.iterations = iterations
         self.h_tol = h_tol
         self.rho_max = rho_max
         self.w_threshold = w_threshold
@@ -94,28 +91,25 @@ class NotearsLowRank(BaseLearner):
         n, d = X.shape
         random_cnt = 0
         total_cnt = 0
+        w_est2 = np.zeros((d, d)).astype('int')
         while total_cnt <= 20:
             try:
                 if total_cnt == 0:
                     w_init_ = np.zeros((d,d))
                 else:
-                    w_init_ = np.random.uniform(-0.3, 0.3, (d,d))
-                
-                w_est2 = self.notears_low_rank(X, rank, w_init_)
-                causal_matrix = (abs(w_est2) > self.w_threshold).astype(int)
-                
+                    w_init_ = np.random.uniform(-0.3, 0.3, (d, d))
+                w_est2 = self.notears_low_rank(X.data, rank, w_init_)
                 random_cnt += 1
                 total_cnt += 1
                 if random_cnt >= 1:
                     break
-
             except ValueError:
                 print(total_cnt, 'NAN error')
                 total_cnt += 1
-
         self.weight_causal_matrix = Tensor(w_est2,
                                            index=X.columns,
                                            columns=X.columns)
+        causal_matrix = (abs(w_est2) > self.w_threshold).astype(int)
         self.causal_matrix = Tensor(causal_matrix, index=X.columns,
                                     columns=X.columns)
 
@@ -126,7 +120,7 @@ class NotearsLowRank(BaseLearner):
         Parameters
         ----------
         X: [n,d] sample matrix
-            max_iter: max number of dual ascent steps.
+            iterations: max number of dual ascent steps.
         rank: int
             The rank of data.
         w_init: None or numpy.ndarray
@@ -181,8 +175,7 @@ class NotearsLowRank(BaseLearner):
             W = np.matmul(v, u.transpose())
             loss_grad = - 1.0 / n * (np.eye(d, d) - W).dot(X.T).dot(X).dot(u)
             E = slin.expm(W * W)  # expm(t1)'
-            obj_grad = loss_grad + (rho * (np.trace(E) - d) + alpha) * 2 * \
-                       np.matmul(E.T * W, u)
+            obj_grad = loss_grad + (rho * (np.trace(E) - d) + alpha) * 2 * np.matmul(E.T * W, u)
             return obj_grad.flatten()
 
         n, d = X.shape
@@ -203,9 +196,9 @@ class NotearsLowRank(BaseLearner):
         # bnds = [(0, 0) if i == j else (None, None) for i in range(d) for j in range(d)]
         
         logging.info('[start]: n={}, d={}, iter_={}, h_={}, rho_={}'.format(
-                    n, d, self.max_iter, self.h_tol, self.rho_max))
+                    n, d, self.iterations, self.h_tol, self.rho_max))
         
-        for flag in range(-1, self.max_iter):       
+        for flag in range(-1, self.iterations):
             if flag >= 0: 
                 while rho <= self.rho_max:
                     sol = sopt.minimize(_func, uv_est, method='TNC', 

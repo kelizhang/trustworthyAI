@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+import logging
 import numpy as np
 from scipy.spatial.distance import pdist, squareform
 from scipy.linalg import cholesky, cho_solve
@@ -39,7 +39,6 @@ class GPRMine(object):
         np.fill_diagonal(K, 1)
         self.K_trans = K.copy()
         K[np.diag_indices_from(K)] += self.alpha
-        # self.KK = K.copy()
 
         self.L_ = cholesky(K, lower=True)  # Line 2
         # self.L_ changed, self._K_inv needs to be recomputed
@@ -47,17 +46,14 @@ class GPRMine(object):
         self.alpha_ = cho_solve((self.L_, True), self.train_y)  # Line 3
         self.is_fit = True
 
-    def predict(self, return_std=False):
+    def predict(self):
         if not self.is_fit:
-            print("GPR Model not fit yet.")
+            logging.info("GPR Model not fit yet.")
             return
 
         K_trans = self.K_trans
         y_mean = K_trans.dot(self.alpha_)  # Line 4 (y_mean = f_star)
-        if return_std == False:
-            return y_mean
-        else:
-            raise ('To cal std')
+        return y_mean
 
     def kernel(self, median, p_eu):
         p_eu_nor = p_eu / median
@@ -79,7 +75,6 @@ class Reward(object):
 
     def __init__(self, input_data, reward_mode='episodic',
                  score_type='BIC', regression_type='LR', alpha=1.0):
-
 
         self.input_data = input_data
         self.reward_type = reward_mode
@@ -105,7 +100,7 @@ class Reward(object):
                                               length_scale_bounds=(1e-2, 1e2)) \
                                     + WhiteKernel(noise_level=1.0,
                                                   noise_level_bounds=(
-                                                  1e-10, 1e+1))
+                                                      1e-10, 1e+1))
         elif regression_type == 'LR':
             self.ones = np.ones((input_data.shape[0], 1), dtype=np.float32)
             X = np.hstack((self.input_data, self.ones))
@@ -124,14 +119,14 @@ class Reward(object):
     def cal_rewards(self, graphs, positions=None, ture_flag=False, gamma=0.98):
         rewards_batches = []
         if not ture_flag:
-            for graphi, position in zip(graphs, positions):
-                reward_ = self.calculate_reward_single_graph(graphi,
+            for graph_i, position in zip(graphs, positions):
+                reward_ = self.calculate_reward_single_graph(graph_i,
                                                              position=position,
                                                              ture_flag=ture_flag)
                 rewards_batches.append(reward_)
         else:
-            for graphi in graphs:
-                reward_ = self.calculate_reward_single_graph(graphi,
+            for graph_i in graphs:
+                reward_ = self.calculate_reward_single_graph(graph_i,
                                                              ture_flag=ture_flag)
                 rewards_batches.append(reward_)
 
@@ -160,7 +155,7 @@ class Reward(object):
 
         return reward_list, normal_batch_reward, max_reward_batch, td_target
 
-    def calculate_yerr(self, X_train, y_train, XtX=None, Xty=None):
+    def calculate_y_err(self, X_train, y_train, XtX=None, Xty=None):
         if self.regression_type == 'LR':
             return self.calculate_LR(X_train, y_train, XtX, Xty)
         elif self.regression_type == 'QR':
@@ -171,8 +166,8 @@ class Reward(object):
             return self.calculate_GPR_learnable(X_train, y_train)
         else:
             raise TypeError(f"The parameter `regression_type` must be one of "
-                                f"[`LR`, `QR`, `GPR`, `GPR_learnable`], "
-                                f"but got ``{self.regression_type}``.")
+                            f"[`LR`, `QR`, `GPR`, `GPR_learnable`], "
+                            f"but got ``{self.regression_type}``.")
 
     def calculate_LR(self, X_train, y_train, XtX, Xty):
         """Linear regression"""
@@ -215,8 +210,8 @@ class Reward(object):
 
         RSS_ls = []
         for i in range(self.seq_length):
-            RSSi = self.cal_RSSi(i, graph_batch)
-            RSS_ls.append(RSSi)
+            RSS_i = self.cal_RSSi(i, graph_batch)
+            RSS_ls.append(RSS_i)
 
         RSS_ls = np.array(RSS_ls)
         if self.regression_type == 'GPR' or self.regression_type == 'GPR_learnable':
@@ -225,11 +220,11 @@ class Reward(object):
             reward_list = RSS_ls[position] / self.n_samples
 
         if self.score_type == 'BIC':
-            BIC = np.log(np.sum(RSS_ls) / self.n_samples + 1e-8)
-            # + np.sum(graph_batch)*self.bic_penalty/self.seq_length
+            BIC = np.log(np.sum(RSS_ls) / self.n_samples + 1e-8) \
+                  + np.sum(graph_batch) * self.bic_penalty / self.seq_length
         elif self.score_type == 'BIC_different_var':
-            BIC = np.sum(np.log(np.array(RSS_ls) / self.n_samples + 1e-8))
-            # + np.sum(graph_batch)*self.bic_penalt
+            BIC = np.sum(np.log(np.array(RSS_ls) / self.n_samples + 1e-8)) \
+                  + np.sum(graph_batch) * self.bic_penalty
         else:
             raise TypeError(f"The parameter `score_type` must be one of "
                             f"[`BIC`,`BIC_different_var`], "
@@ -256,7 +251,7 @@ class Reward(object):
                 y_train = self.X[:, i]
                 XtX = self.XtX[:, cols_TrueFalse][cols_TrueFalse, :]
                 Xty = self.XtX[:, i][cols_TrueFalse]
-                y_err = self.calculate_yerr(X_train, y_train, XtX, Xty)
+                y_err = self.calculate_y_err(X_train, y_train, XtX, Xty)
             elif self.regression_type == 'GPR':
                 X_train = self.input_data[:, cols_TrueFalse]
                 y_train = self.input_data[:, i]
@@ -275,7 +270,7 @@ class Reward(object):
             elif self.regression_type == 'GPR_learnable':
                 X_train = self.input_data[:, cols_TrueFalse]
                 y_train = self.input_data[:, i]
-                y_err = self.calculate_yerr(X_train, y_train, X_train, y_train)
+                y_err = self.calculate_y_err(X_train, y_train, X_train, y_train)
             else:
                 raise TypeError(f"The parameter `regression_type` must be one of "
                                 f"[`LR`, `GPR`, `GPR_learnable`], "
@@ -301,4 +296,3 @@ class Reward(object):
         for graph_int, score_l in score_cycs:
             ls.append((graph_int, (score_l[0], score_l[-1])))
         return sorted(ls, key=lambda x: x[1][0])
-

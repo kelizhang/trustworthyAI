@@ -16,9 +16,9 @@
 import numpy as np
 
 
-class PrioriKnowledge(object):
+class PriorKnowledge(object):
     """
-    A class for a priori knowledge.
+    A class for a prior knowledge.
 
     Parameters
     ----------
@@ -28,10 +28,21 @@ class PrioriKnowledge(object):
     Attributes
     ----------
     matrix: np.ndarray
-        0  : i does not have a directed edge to j;
-        1  : i has a directed edge to j;
+        0  : i does not have a directed path to j;
+        1  : i has a directed path to j;
         -1 : No prior background_knowledge is available to know if either of
              the two cases above (0 or 1) is true.
+
+    Examples
+    --------
+    >>> prior = PriorKnowledge(4)
+    >>> prior.add_required_edges([(0, 1), (1, 3)])
+    >>> prior.add_forbidden_edges([(1, 2), (2, 3)])
+    >>> prior.add_undirected_edge(0, 3)
+    >>> print(prior.matrix)
+    An more usually use case is to create an instance from a prior matrix:
+    >>> prior_knowledge = PriorKnowledge.from_prior_matrix(prior.matrix)
+    >>> print(prior_knowledge.matrix)
     """
 
     def __init__(self, n_nodes) -> None:
@@ -53,7 +64,7 @@ class PrioriKnowledge(object):
 
         Examples
         --------
-        >>> p = PrioriKnowledge(4)
+        >>> p = PriorKnowledge(4)
         >>> p.add_required_edge(0, 1)
         >>> print(p.matrix)
         [[ 0  1 -1 -1]
@@ -75,7 +86,7 @@ class PrioriKnowledge(object):
 
         Examples
         --------
-        >>> p = PrioriKnowledge(4)
+        >>> p = PriorKnowledge(4)
         >>> p.add_required_edges([(0, 1), (1, 2)]
         >>> print(p.matrix)
         [[ 0  1 -1 -1]
@@ -99,7 +110,7 @@ class PrioriKnowledge(object):
 
         Examples
         --------
-        >>> p = PrioriKnowledge(4)
+        >>> p = PriorKnowledge(4)
         >>> p.add_forbidden_edge(0, 1)
         >>> print(p.matrix)
         [[ 0  0 -1 -1]
@@ -121,7 +132,7 @@ class PrioriKnowledge(object):
 
         Examples
         --------
-        >>> p = PrioriKnowledge(4)
+        >>> p = PriorKnowledge(4)
         >>> p.add_forbidden_edges([(0, 1), (1, 2)]
         >>> print(p.matrix)
         [[ 0  0 -1 -1]
@@ -145,7 +156,7 @@ class PrioriKnowledge(object):
 
         Examples
         --------
-        >>> p = PrioriKnowledge(4)
+        >>> p = PriorKnowledge(4)
         >>> p.add_undirected_edge(0, 1)
         >>> print(p.matrix)
         [[ 0  1 -1 -1]
@@ -156,6 +167,7 @@ class PrioriKnowledge(object):
 
         self.matrix[i, j] = 1
         self.matrix[j, i] = 1
+        self.add_required_edges([(i, j), (j, i)])
 
     def add_undirected_edges(self, edges) -> None:
         """Add multiple edges with unknown direction by using a list of tuples.
@@ -167,7 +179,7 @@ class PrioriKnowledge(object):
 
         Examples
         --------
-        >>> p = PrioriKnowledge(4)
+        >>> p = PriorKnowledge(4)
         >>> p.add_undirected_edges([(0, 1), (1, 2)]
         >>> print(p.matrix)
         [[ 0  1 -1 -1]
@@ -186,29 +198,54 @@ class PrioriKnowledge(object):
         return (i, j) in self.required_edges
 
     def remove_edge(self, i, j) -> None:
-        """Remove any edges i---j and j---i."""
+        """Remove the edge (i, j)
 
-        self.matrix[i, j] = 0
-        self.matrix[j, i] = 0
+        Make (i, j) convert to unknown edge no matter whether required or forbidden.
+        """
+
         if (i, j) in self.required_edges:
             self.required_edges.remove((i, j))
-        if (j, i) in self.required_edges:
-            self.required_edges.remove((j, i))
         if (i, j) not in self.forbidden_edges:
             self.forbidden_edges.append((i, j))
-        if (j, i) not in self.forbidden_edges:
-            self.forbidden_edges.append((j, i))
+        self.matrix[i, j] = -1
+
+    @staticmethod
+    def from_prior_matrix(prior_matrix):
+        """
+        Return an instance of PriorKnowledge
+
+        Parameters
+        ----------
+        prior_matrix: array, [n_nodes, n_nodes]
+            0  : i does not have a directed path to j;
+            1  : i has a directed path to j;
+            -1 : No prior background_knowledge is available to know if either of
+                 the two cases above (0 or 1) is true.
+        """
+
+        output = PriorKnowledge(prior_matrix.shape[0])
+        assert not (set(np.unique(prior_matrix)) - {-1, 0, 1}), \
+            f"The element value of graph_matrix must be one of [-1, 0, 1]."
+        for i, j in zip(*np.where(prior_matrix == 0)):
+            if i == j:
+                continue
+            output.add_forbidden_edge(i, j)
+        for i, j in zip(*np.where(prior_matrix == 1)):
+            if i == j:
+                continue
+            output.add_required_edge(i, j)
+        return output
 
 
-def orient_by_priori_knowledge(skeleton, priori_knowledge):
+def orient_by_prior_knowledge(skeleton, prior_knowledge):
     """
-    Orient the direction of all edges based on a priori knowledge.
+    Orient the direction of all edges based on a prior knowledge.
 
     Parameters
     ----------
     skeleton: np.ndarray
         a skeleton matrix
-    priori_knowledge: PrioriKnowledge
+    prior_knowledge: PriorKnowledge
         a class object
 
     Returns
@@ -219,18 +256,10 @@ def orient_by_priori_knowledge(skeleton, priori_knowledge):
         out[i, j] = 1 and out[j, i] = 1 indicates `i---j`;
     """
 
-    for i, j in priori_knowledge.required_edges:
+    for i, j in prior_knowledge.required_edges:
         if skeleton[i, j] == 0:
             skeleton[i, j] = 1
-    for i, j in priori_knowledge.forbidden_edges:
+    for i, j in prior_knowledge.forbidden_edges:
         if skeleton[i, j] == 1:
             skeleton[i, j] = 0
     return skeleton
-
-
-if __name__ == '__main__':
-    priori = PrioriKnowledge(4)
-    priori.add_required_edges([(0, 1), (1, 3)])
-    priori.add_forbidden_edges([(1, 2), (2, 3)])
-    priori.add_undirected_edge(0, 3)
-    print(priori.matrix)

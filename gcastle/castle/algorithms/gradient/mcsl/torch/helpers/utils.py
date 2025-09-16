@@ -13,8 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import random
 import numpy as np
 import torch
+from scipy.stats import uniform
 
 
 def convert_logits_to_sigmoid(w, tau=1.0):
@@ -37,6 +39,14 @@ def compute_acyclicity(w):
     return torch.trace(torch.matrix_exp(w * w)) - w.shape[0]
 
 
+def scipy_uniform(shape, seed=0, minval=0., maxval=1., device=None):
+    if seed != 0:
+        random.seed(seed)
+    u = uniform.rvs(minval, maxval, size=shape)
+    u = torch.tensor(u, requires_grad=True, device=device)
+    return u
+
+
 def sample_gumbel(shape, eps=1e-20, seed=0, device=None):
 
     eps = torch.tensor(eps, device=device)
@@ -51,8 +61,8 @@ def sample_gumbel(shape, eps=1e-20, seed=0, device=None):
 def gumbel_sigmoid(logits, temperature, seed, device):
 
     gumbel_softmax_sample = (logits
-                 + sample_gumbel(logits.shape, seed=seed, device=device)
-                 - sample_gumbel(logits.shape, seed=seed + 1, device=device))
+                             + sample_gumbel(logits.shape, seed=seed, device=device)
+                             - sample_gumbel(logits.shape, seed=seed + 1, device=device))
     y = torch.sigmoid(gumbel_softmax_sample / temperature)
 
     return y
@@ -62,7 +72,7 @@ def generate_upper_triangle_indices(d, device=None):
 
     if d == 1:
         return torch.zeros(1, dtype=torch.int64, device=device)
-    mat = np.arange((d)**2).reshape(d, d)
+    mat = np.arange(d**2).reshape(d, d)
     mat = torch.tensor(mat, dtype=torch.long, device=device)
     target_indices = mat[torch.triu(mat, 1) != 0]
 

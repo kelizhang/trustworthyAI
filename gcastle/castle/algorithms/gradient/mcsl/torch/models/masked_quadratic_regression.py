@@ -37,6 +37,7 @@ class MaskedQuadraticRegression(nn.Module):
         ----------
         x: torch.Tensor
             shape = (n, d - 1)
+        choice:
 
         Returns
         -------
@@ -63,9 +64,6 @@ class MaskedQuadraticRegression(nn.Module):
         self.w3 = self.w3.to(device=self.device)
         output += torch.sum(self.w3 * combinations_cross_terms, dim=1)
 
-        # # Bias term
-        # b = torch.randn(self.n_samples)
-        # output += b
         return output
 
     def _init_weight(self):

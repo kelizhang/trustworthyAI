@@ -64,8 +64,7 @@ class MaskedNN(nn.Module):
                 if j == 0:
                     input_dim = first_input_dim
                 func = nn.Sequential(
-                    nn.Linear(in_features=input_dim,
-                          out_features=self.hidden_dim).to(device=self.device),
+                    nn.Linear(in_features=input_dim, out_features=self.hidden_dim).to(device=self.device),
                     nn.LeakyReLU(negative_slope=0.05).to(device=self.device)
                 )
                 reg_nn.append(func)

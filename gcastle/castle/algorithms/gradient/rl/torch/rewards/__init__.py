@@ -13,4 +13,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .Reward_BIC import get_Reward
+from .reward_bic import GetReward

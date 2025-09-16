@@ -41,8 +41,9 @@ class MLP(nn.Module):
 
         return out_x
 
+
 ################################
-#===========Encoder=============
+# ===========Encoder============
 ################################
 class Encoder(nn.Module):
 
@@ -83,18 +84,18 @@ class Encoder(nn.Module):
         # adj_Aforz = I-A^T
         adj_Aforz = torch.eye(adj_A1.shape[0], device=self.device) - adj_A1.T
         if self.encoder_type == 'mlp':
-            mlp_out = self.mlp(x.to(self.mlp.device))
+            mlp_out = self.mlp.forward(x.to(self.mlp.device))
             logits = torch.matmul(adj_Aforz, mlp_out + self.wa) - self.wa
         else:
             adj_A_inv = torch.inverse(adj_Aforz)
             meanF = torch.matmul(adj_A_inv, torch.mean(torch.matmul(adj_Aforz, x), 0))
             logits = torch.matmul(adj_Aforz, x - meanF)
 
-        return (logits, adj_A1)
+        return logits, adj_A1
 
 
 ################################
-#===========Decoder=============
+# ===========Decoder============
 ################################
 class Decoder(nn.Module):
 
@@ -117,7 +118,6 @@ class Decoder(nn.Module):
             elif isinstance(m, nn.BatchNorm1d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
-
 
     def forward(self, z, adj_A, wa):
 

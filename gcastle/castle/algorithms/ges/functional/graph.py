@@ -48,7 +48,7 @@ def connect(i, G, relation=None) -> set:
     elif relation.lower() == 'child':
         out = np.where(np.logical_and(from_i,  ~to_i))[0]
     else:
-        raise ValueError(f"The excepted value of parameter `connection` is "
+        raise ValueError(f"The excepted value of parameter `relation` is "
                          f"one of ['neighbors', 'adjacent', None], but got "
                          f"{relation}.")
 
@@ -106,8 +106,8 @@ def semi_directed_path(x, y, G) -> list:
     cache = [[x]]
     while len(cache) > 0:
         current_path = cache.pop(0)
-        next = list(visitable[current_path[-1]] - set(current_path))
-        for next_node in next:
+        _next = list(visitable[current_path[-1]] - set(current_path))
+        for next_node in _next:
             new_path = current_path.copy()
             new_path.append(next_node)
             if next_node == y:
@@ -202,7 +202,7 @@ def pdag_to_dag(P) -> np.ndarray:
 
     G = only_directed_graph(P)
     all_nodes = list(np.arange(len(P)))
-    while (len(P) > 0):
+    while len(P) > 0:
         found = False
         i = 0
         while not found and i < len(P):

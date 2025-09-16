@@ -15,7 +15,7 @@
 
 from .base_model import NonlinearGauss
 from .base_model import NonlinearGaussANM
+from .base_model import GranLoss
 
-from .dag_optimizer import compute_A_phi
 from .dag_optimizer import compute_jacobian_avg
 from .dag_optimizer import is_acyclic

@@ -41,7 +41,7 @@ def threshold_till_dag(B):
         Minimum threshold to obtain DAG.
     """
     if is_dag(B):
-        return B, 0
+        return B
 
     B = np.copy(B)
     # Get the indices with non-zero weight
@@ -60,9 +60,8 @@ def threshold_till_dag(B):
 
         # Remove edge with smallest absolute weight
         B[j, i] = 0
-        dag_thres = abs(weight)
 
-    return B, dag_thres
+    return B
 
 
 def postprocess(B, graph_thres=0.3):
@@ -86,7 +85,7 @@ def postprocess(B, graph_thres=0.3):
     """
     B = np.copy(B)
     B[np.abs(B) <= graph_thres] = 0    # Thresholding
-    B, _ = threshold_till_dag(B)
+    B = threshold_till_dag(B)
 
     return B
 

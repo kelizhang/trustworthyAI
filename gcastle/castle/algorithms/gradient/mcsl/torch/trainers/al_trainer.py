@@ -17,7 +17,6 @@ import logging
 import numpy as np
 import torch
 
-from ..helpers.utils import compute_acyclicity, convert_logits_to_sigmoid
 from castle.common.consts import LOG_FREQUENCY, LOG_FORMAT
 
 
@@ -46,15 +45,14 @@ class Trainer(object):
         self.optimizer = torch.optim.Adam(self.model.parameters(),
                                           lr=self.learning_rate,)
 
-    def train(self, x, max_iter, iter_step) -> torch.Tensor:
-        """"""
+    def train(self, x, iterations, iter_step) -> torch.Tensor:
 
         rho = self.init_rho
         h = np.inf
         h_new = np.inf
         alpha = 0.0
         w_logits_new = None
-        for i in range(1, max_iter + 1):
+        for i in range(1, iterations + 1):
             logging.info(f'Current epoch: {i}==================')
             while rho < self.rho_thresh:
                 loss_new, h_new, w_logits_new = self.train_step(
@@ -65,15 +63,8 @@ class Trainer(object):
                 else:
                     break
             # Use two stopping criterion
-            h_logits = compute_acyclicity(
-                convert_logits_to_sigmoid(w_logits_new.detach(),
-                                          tau=self.temperature)
-            )
             logging.info(f'Current        h: {h_new}')
-            logging.info(f'Current h_logits: {h_logits}')
-            if (h_new <= self.h_tol
-                    # and h_logits <= self.h_tol
-                    and i > self.init_iter):
+            if h_new <= self.h_tol and i > self.init_iter:
                 break
             # Update h and alpha
             h = h_new.detach().cpu()

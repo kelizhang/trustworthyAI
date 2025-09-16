@@ -23,33 +23,33 @@ class DataGenerator(object):
 
     def __init__(self, X, solution_dag=None, normalize_flag=False, transpose_flag=False):
 
-        self.inputdata = X
-        self.datasize, self.d = self.inputdata.shape
+        self.input_data = X
+        self.data_size, self.d = self.input_data.shape
 
         if normalize_flag:
-            self.inputdata = StandardScaler().fit_transform(self.inputdata)
+            self.input_data = StandardScaler().fit_transform(self.input_data)
 
         if solution_dag is None:
             gtrue = np.zeros([self.d, self.d])
         else:
             gtrue = solution_dag
-            if transpose_flag: 
+            if transpose_flag:
                 gtrue = np.transpose(gtrue)
 
         # (i,j)=1 => node i -> node j
         self.true_graph = np.int32(np.abs(gtrue) > 1e-3)
 
-    def gen_instance_graph(self, max_length, dimension, test_mode=False):
-        seq = np.random.randint(self.datasize, size=(dimension))
-        input_ = self.inputdata[seq]
+    def gen_instance_graph(self, dimension):
+        seq = np.random.randint(self.data_size, size=dimension)
+        input_ = self.input_data[seq]
         return input_.T
 
     # Generate random batch for training procedure
-    def train_batch(self, batch_size, max_length, dimension):
+    def train_batch(self, batch_size, dimension):
         input_batch = []
 
         for _ in range(batch_size):
-            input_= self.gen_instance_graph(max_length, dimension)
+            input_ = self.gen_instance_graph(dimension)
             input_batch.append(input_)
 
         return input_batch

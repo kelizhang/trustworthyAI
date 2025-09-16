@@ -1,0 +1,132 @@
+# coding=utf-8
+# Copyright (C) 2022. Huawei Technologies Co., Ltd. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import numpy as np
+import mindspore as ms
+import mindspore.nn as nn
+import mindspore.ops as ops
+import logging
+
+from castle.common.consts import LOG_FREQUENCY, LOG_FORMAT
+from .. import functional_for_mindspore as ffm
+
+
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+
+
+class LossFn(nn.Cell):
+
+    def __init__(self, n, l1_penalty):
+        super(LossFn, self).__init__()
+        self.n = n
+        self.l1_penalty = l1_penalty
+
+        self.curr_mse = ms.Parameter(ms.Tensor(0, ms.float32), requires_grad=True)
+        self.curr_h = ms.Parameter(ms.Tensor(0, ms.float32), requires_grad=True)
+
+    def construct(self, logits, labels, alpha, rho):
+        """logits is x_est, labels is x"""
+        x_est, w_adj = logits
+        curr_mse = ops.square(ms.numpy.norm(labels - x_est))
+        curr_h = ffm.compute_h(w_adj)
+        self.curr_mse = curr_mse
+        self.curr_h = curr_h
+        loss = ((0.5 / self.n) * curr_mse
+                + self.l1_penalty * ms.numpy.norm(w_adj, 1)
+                + alpha * curr_h
+                + 0.5 * rho * (curr_h**2))
+        return loss
+
+
+class LossNet(nn.Cell):
+    def __init__(self, network, loss_fn):
+        super(LossNet, self).__init__()
+        self._network = network
+        self._loss_fn = loss_fn
+
+    def construct(self, x, alpha, rho):
+        x_est, w_adj = self._network(x)
+        out = self._loss_fn((x_est, w_adj), x, alpha, rho)
+        return out
+
+
+class ALTrainer(object):
+
+    def __init__(self, n, d, model, lr, init_iter, alpha, beta, rho, rho_thresh,
+                 h_thresh, l1_penalty, gamma, early_stopping,
+                 early_stopping_thresh, seed, device=None):
+        self.n = n
+        self.d = d
+        self.model = model
+        self.lr = lr
+        self.init_iter = init_iter
+        self.alpha = alpha
+        self.beta = beta  # rho_multiply
+        self.rho = rho
+        self.rho_thresh = rho_thresh
+        self.h_thresh = h_thresh  # 1e-8
+        self.l1_penalty = l1_penalty
+        self.gamma = gamma
+        self.early_stopping = early_stopping
+        self.early_stopping_thresh = early_stopping_thresh
+        self.seed = seed
+        self.device = device
+
+        self.optimizer = nn.Adam(self.model.trainable_params(), learning_rate=self.lr)
+        self.loss_fn = LossFn(self.n, self.l1_penalty)
+        self.loss_net = LossNet(self.model, self.loss_fn)
+        self.train_net = nn.TrainOneStepCell(self.loss_net, self.optimizer)
+
+    def train(self, x, iterations, update_freq):
+        alpha, beta, rho = self.alpha, self.beta, self.rho
+        h, h_new = np.inf, np.inf
+        prev_w_est, prev_mse = None, np.inf
+        w_est = None
+        for epoch in range(1, iterations + 1):
+            logging.info(f'Current epoch: {epoch}==================')
+            mse_new, w_new = None, None
+            while rho < self.rho_thresh:
+                mse_new, h_new, w_new = self.train_loop(x, update_freq, alpha, rho)
+                if h_new > self.gamma * h:
+                    rho *= self.beta
+                else:
+                    break
+            logging.info(f'Current     h: {h_new.asnumpy()}')
+
+            if self.early_stopping:
+                if mse_new / prev_mse > self.early_stopping_thresh and h_new <= 1e-7:
+                    return prev_w_est
+                else:
+                    prev_w_est = w_new
+                    prev_mse = mse_new
+
+            # update rules
+            w_est, h = w_new, h_new.asnumpy()
+            alpha += rho * h_new.asnumpy()
+            if h <= self.h_thresh and epoch > self.init_iter:
+                break
+        return w_est
+
+    def train_loop(self, x, update_freq, alpha, rho):
+        """"""
+        for _ in range(update_freq):
+            ms._set_seed(self.seed)
+            loss = self.train_net(x, alpha, rho)
+            if _ % LOG_FREQUENCY == 0:
+                logging.info(f'Current loss in step {_}: {loss.asnumpy()}')
+        curr_mse = self.loss_fn.curr_mse
+        curr_h = self.loss_fn.curr_h
+        curr_adj = self.model.w_adj
+        return curr_mse, curr_h, curr_adj

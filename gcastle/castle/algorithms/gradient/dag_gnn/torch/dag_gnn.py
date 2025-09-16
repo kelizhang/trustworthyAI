@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import logging
 import numpy as np
 import torch
@@ -21,29 +20,16 @@ import torch.optim as optim
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
 
-from castle.common import BaseLearner, Tensor
+from castle.common import GradientBasedLearner, Tensor
 from castle.common import consts
 from castle.common.validator import check_args_value
-
-from castle.algorithms.gradient.dag_gnn.torch.utils import functions as func
-from castle.algorithms.gradient.dag_gnn.torch.models.modules import Encoder, Decoder
-
-
-def set_seed(seed):
-    """
-    Referred from:
-    - https://stackoverflow.com/questions/38469632/tensorflow-non-repeatable-results
-    """
-
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    try:
-        os.environ['PYTHONHASHSEED'] = str(seed)
-    except:
-        pass
+from .utils import functions as func
+from .models.modules import Encoder, Decoder
+from castle.common.class_factory import ClassFactory
 
 
-class DAG_GNN(BaseLearner):
+@ClassFactory.algorithms.register()
+class DAGGNN(GradientBasedLearner):
     """DAG Structure Learning with Graph Neural Networks
 
     References
@@ -62,12 +48,8 @@ class DAG_GNN(BaseLearner):
         encoder output dimension
     decoder_hidden: int, default: 64
         MLP decoder hidden layer dimension, just one hidden layer.
-    encoder_dropout: float, default: 0.0
-        Dropout rate (1 - keep probability).
-    decoder_dropout: float, default: 0.0
-        Dropout rate (1 - keep probability).
-    epochs: int, default: 300
-        train epochs
+    iterations: int, default: 300
+        train iterations
     k_max_iter: int, default: 1e2
         the max iteration number for searching lambda and c.
     batch_size: int, default: 100
@@ -78,9 +60,9 @@ class DAG_GNN(BaseLearner):
         Period of learning rate decay.
     gamma: float, default: 1.0
         Multiplicative factor of learning rate decay.
-    lambda_a: float, default: 0.0
+    init_lambda_a: float, default: 0.0
         coefficient for DAG constraint h(A).
-    c_a: float, default: 1.0
+    init_c_a: float, default: 1.0
         coefficient for absolute value h(A).
     c_a_thresh: float, default: 1e20
         control loop by c_a
@@ -103,44 +85,40 @@ class DAG_GNN(BaseLearner):
         choose optimizer, 'Adam' or 'SGD'
     seed: int, default: 42
         random seed
-    device_type: str, default: cpu
-        ``cpu`` or ``gpu``
-    device_ids: int or str, default None
-        CUDA devices, it's effective when ``use_gpu`` is True.
-        For single-device modules, ``device_ids`` can be int or str, e.g. 0 or '0',
-        For multi-device modules, ``device_ids`` must be str, format like '0, 1'.
 
     Examples
     --------
-    >>> from castle.algorithms.gradient.dag_gnn.torch import DAG_GNN
+    >>> import castle
+    >>> castle.set_backend('pytorch')
+    >>> from castle.algorithms import DAGGNN
     >>> from castle.datasets import load_dataset
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
     >>> X, true_dag, _ = load_dataset('IID_Test')
-    >>> m = DAG_GNN()
-    >>> m.learn(X)
-    >>> GraphDAG(m.causal_matrix, true_dag)
-    >>> met = MetricsDAG(m.causal_matrix, true_dag)
-    >>> print(met.metrics)
+    >>> algo = DAGGNN()
+    # If you want to use GPU, you can call CORL().set_context() like the following code:
+    >>> algo.set_context(device_target='GPU') # 'GPU', 'CPU' or 'Ascend'
+    >>> algo.learn(X)
+    >>> plot_causal_graph(algo.causal_matrix, true_dag)
+    >>> met = StructureMetrics(algo.causal_matrix, true_dag)
+    >>> print(met.values)
     """
 
     @check_args_value(consts.GNN_VALID_PARAMS)
     def __init__(self, encoder_type='mlp', decoder_type='mlp',
                  encoder_hidden=64, latent_dim=None, decoder_hidden=64,
-                 encoder_dropout=0.0, decoder_dropout=0.0, epochs=300, k_max_iter=1e2, tau_a=0.0,
+                 iterations=300, k_max_iter=1e2, tau_a=0.0,
                  batch_size=100, lr=3e-3, lr_decay=200, gamma=1.0, init_lambda_a=0.0, init_c_a=1.0,
                  c_a_thresh=1e20, eta=10, multiply_h=0.25, h_tolerance=1e-8,
                  use_a_connect_loss=False, use_a_positiver_loss=False, graph_threshold=0.3,
-                 optimizer='adam', seed=42, device_type='cpu', device_ids='0'):
-        super(DAG_GNN, self).__init__()
+                 optimizer='adam', seed=42):
+        super(DAGGNN, self).__init__()
         self.encoder_type = encoder_type
         self.decoder_type = decoder_type
         self.encoder_hidden = encoder_hidden
         self.latent_dim = latent_dim
         self.decoder_hidden = decoder_hidden
-        self.encoder_dropout = encoder_dropout
-        self.decoder_dropout = decoder_dropout
-        self.epochs = epochs
+        self.iterations = iterations
         self.k_max_iter = int(k_max_iter)
         self.batch_size = batch_size
         self.lr = lr
@@ -158,29 +136,22 @@ class DAG_GNN(BaseLearner):
         self.graph_threshold = graph_threshold
         self.optimizer = optimizer
         self.seed = seed
-        self.device_type = device_type
-        self.device_ids = device_ids
-
-        if torch.cuda.is_available():
-            logging.info('GPU is available.')
-        else:
-            logging.info('GPU is unavailable.')
-            if self.device_type == 'gpu':
-                raise ValueError("GPU is unavailable, "
-                                 "please set device_type = 'cpu'.")
-        if self.device_type == 'gpu':
-            if self.device_ids:
-                os.environ['CUDA_VISIBLE_DEVICES'] = str(self.device_ids)
-            device = torch.device('cuda')
-        else:
-            device = torch.device('cpu')
-        self.device = device
-
         self.input_dim = None
 
     def learn(self, data, columns=None, **kwargs):
+        """
+        Set up and run the MCSL algorithm.
 
-        set_seed(self.seed)
+        Parameters
+        ----------
+        data: castle.Tensor or numpy.ndarray
+            The castle.Tensor or numpy.ndarray format data you want to learn.
+        columns: Index or array-like
+            Column labels to use for resulting tensor. Will default to
+            RangeIndex (0, 1, 2, ..., n) if no column labels are provided.
+        """
+
+        self._set_seed(self.seed)
 
         if data.ndim == 2:
             data = np.expand_dims(data, axis=2)
@@ -231,7 +202,7 @@ class DAG_GNN(BaseLearner):
         epoch = 0
         for step_k in range(self.k_max_iter):
             while c_a < self.c_a_thresh:
-                for epoch in range(self.epochs):
+                for epoch in range(self.iterations):
                     elbo_loss, origin_a = self._train(train_loader=train_loader,
                                                       optimizer=optimizer,
                                                       lambda_a=lambda_a,
@@ -273,7 +244,7 @@ class DAG_GNN(BaseLearner):
         kl_train = []
         origin_a = None
         for batch_idx, (data, relations) in enumerate(train_loader):
-            x = Variable(data).double()
+            x = Variable(data)
 
             optimizer.zero_grad()
 
@@ -323,4 +294,4 @@ class DAG_GNN(BaseLearner):
             nll_train.append(loss_nll.item())
             kl_train.append(loss_kl.item())
 
-        return (np.mean(np.mean(kl_train) + np.mean(nll_train)), origin_a)
+        return np.mean(np.mean(kl_train) + np.mean(nll_train)), origin_a

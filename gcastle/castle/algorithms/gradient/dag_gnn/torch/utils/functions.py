@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader
 def get_dataloader(data, batch_size=100, device=None):
     """Return train_loader"""
 
-    feat_train = torch.tensor(data, dtype=torch.float, device=device)
+    feat_train = torch.tensor(data, device=device)
 
     # reconstruct itself
     train_data = TensorDataset(feat_train, feat_train)
@@ -83,7 +83,7 @@ def get_tril_offdiag_indices(num_nodes):
     tril_idx = tril_idx[get_offdiag_indices(num_nodes)]
     return tril_idx.nonzero()
 
-###############################################################
+
 # compute constraint h(A) value
 def matrix_poly(matrix, d):
     x = torch.eye(d, device=matrix.device).double()+ torch.div(matrix, d)
@@ -95,10 +95,9 @@ def _h_A(A, m):
     h_A = torch.trace(expm_A) - m
     return h_A
 
-prox_plus = torch.nn.Threshold(0.,0.)
 
 def update_optimizer(optimizer, original_lr, c_A):
-    '''related LR to c_A, whenever c_A gets big, reduce LR proportionally'''
+    """related LR to c_A, whenever c_A gets big, reduce LR proportionally"""
     MAX_LR = 1e-2
     MIN_LR = 1e-4
 
@@ -117,8 +116,6 @@ def update_optimizer(optimizer, original_lr, c_A):
     return optimizer, lr
 
 
-
-###################################################
 def nll_gaussian(preds, target, variance=0.0, add_const=False):
     mean1 = preds
     mean2 = target
@@ -141,13 +138,13 @@ def a_connect_loss(A, tol, z):
     d = A.size()[0]
     loss = 0
     for i in range(d):
-        loss +=  2 * tol - torch.sum(torch.abs(A[:,i])) - torch.sum(torch.abs(A[i,:])) + z * z
+        loss += 2 * tol - torch.sum(torch.abs(A[:, i])) - torch.sum(torch.abs(A[i, :])) + z * z
     return loss
+
 
 # element loss: make sure each A_ij > 0
 def a_positive_loss(A, z_positive):
     result = - A + z_positive * z_positive
-    loss =  torch.sum(result)
+    loss = torch.sum(result)
 
     return loss
-

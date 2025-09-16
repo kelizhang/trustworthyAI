@@ -18,19 +18,21 @@ from scipy.linalg import expm
 from tqdm import tqdm
 from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.feature_selection import SelectFromModel
+import mindspore as ms
 import mindspore.nn as nn
+import mindspore.ops as ops
 import mindspore.numpy as msnp
-from mindspore import ops, set_seed
-from mindspore import Tensor as MsTensor
-from mindspore.nn.loss.loss import LossBase
-from mindspore import context, dtype as mstype
-from mindspore import dataset as ds
 
 from .base import NonlinearGauss
 from .base import NonlinearGaussANM
 from .base import compute_jacobian_avg
 from .base import is_acyclic
-from castle.common import BaseLearner, Tensor
+from .base import GranLoss
+
+from castle.common import GradientBasedLearner, Tensor
+from castle.common.validator import check_args_value
+from castle.common.consts import GRANDAG_VALID_PARAMS
+from castle.common.class_factory import ClassFactory
 
 
 class NormalizationData(object):
@@ -74,7 +76,7 @@ class NormalizationData(object):
         else:
             data = data[shuffle_idx[train_samples:]]
         # as tensor
-        self.data_set = MsTensor(data).astype(dtype=mstype.float32)
+        self.data_set = ms.Tensor(data).astype(dtype=ms.float32)
 
         # Normalize data
         self.mean, self.std = mean, std
@@ -103,24 +105,13 @@ class NormalizationData(object):
         sample_idxs = self.random.choice(np.arange(int(self.n_samples)),
                                          size=(int(batch_size),),
                                          replace=False)
-        samples = self.data_set[MsTensor(sample_idxs, mstype.int32)]
+        samples = self.data_set[ms.Tensor(sample_idxs, ms.int32)]
 
         return samples, ops.ones_like(samples)
 
 
-class GranLoss(LossBase):
-    """
-    Loss class for network train
-    """
-    def __init__(self, reduction='mean'):
-        super(GranLoss, self).__init__(reduction)
-
-    def construct(self, inputs, *args):
-        output = self.get_loss(inputs)
-        return output
-
-
-class GraNDAG(BaseLearner):
+@ClassFactory.algorithms.register()
+class GraNDAG(GradientBasedLearner):
     """
     Gradient Based Neural DAG Learner
 
@@ -131,8 +122,6 @@ class GraNDAG(BaseLearner):
 
     Parameters
     ----------
-    input_dim: int
-        number of input layer (number of varibles), must be int
     hidden_num: int, default 2
         number of hidden layers
     hidden_dim: int, default 10
@@ -141,6 +130,10 @@ class GraNDAG(BaseLearner):
         batch size of per training of NN
     lr: float, default 0.001
         learning rate
+    lr_decay: int, default: 1000
+        Period of learning rate decay.
+    gamma: float, default: 0.1
+        Multiplicative factor of learning rate decay.
     iterations: int, default 10000
         times of iteration
     model_name: str, default 'NonLinGaussANM'
@@ -149,15 +142,9 @@ class GraNDAG(BaseLearner):
         name of Nonlinear activation function, 'sigmoid' or 'leaky-relu'
     optimizer: str, default 'rmsprop'
         Method of optimize, 'rmsprop' or 'sgd'
-    h_threshold: float, default 1e-7
+    h_threshold: float, default 1e-8
         constrained threshold, if constrained value less than equal h_threshold
         means augmented lagrangian has converged, model will stop trainning
-    device_type: str, default 'cpu'
-        The target device to run, support 'ascend', 'gpu', and 'cpu'
-    device_ids: int, default 0
-        ID of the target device,
-        the value must be in [0, device_num_per_host-1],
-        while device_num_per_host should be no more than 4096
     use_pns: bool, default False
         whether use pns before training, if nodes > 50, use it.
     pns_thresh: float, default 0.75
@@ -209,18 +196,19 @@ class GraNDAG(BaseLearner):
     OUT_DIM = 2
     OUT_DIM_ANM = 1
 
-    def __init__(self, input_dim,
+    @check_args_value(GRANDAG_VALID_PARAMS)
+    def __init__(self,
                  hidden_num=2,
                  hidden_dim=10,
                  batch_size=64,
-                 lr=0.001,
+                 lr=0.01,
+                 lr_decay=1000,
+                 gamma=0.1,
                  iterations=10000,
                  model_name='NonLinGaussANM',
                  nonlinear='leaky-relu',
                  optimizer='rmsprop',
-                 h_threshold=1e-7,
-                 device_type='cpu',
-                 device_ids=0,
+                 h_threshold=1e-8,
                  use_pns=False,
                  pns_thresh=0.75,
                  num_neighbors=None,
@@ -234,21 +222,22 @@ class GraNDAG(BaseLearner):
                  stop_crit_win=100,
                  edge_clamp_range=0.0001,
                  norm_prod='paths',
-                 square_prod=False):
+                 square_prod=False
+                 ):
         super(GraNDAG, self).__init__()
 
-        self.input_dim = input_dim
+        self.input_dim = None
         self.hidden_num = hidden_num
         self.hidden_dim = hidden_dim
         self.batch_size = batch_size
         self.lr = lr
+        self.lr_decay = lr_decay
+        self.gamma = gamma
         self.iterations = iterations
         self.model_name = model_name
         self.nonlinear = nonlinear
         self.optimizer = optimizer
         self.h_threshold = h_threshold
-        self.device_type = device_type
-        self.device_ids = device_ids
         self.use_pns = use_pns
         self.pns_thresh = pns_thresh
         self.num_neighbors = num_neighbors
@@ -264,6 +253,9 @@ class GraNDAG(BaseLearner):
         self.norm_prod = norm_prod
         self.square_prod = square_prod
 
+        if self.norm_prod not in ['paths', 'none']:
+            raise ValueError("Param 'norm_prod' should be in {'paths', 'none'}.")
+
     def learn(self, data, columns=None, **kwargs):
         """Set up and run the Gran-DAG algorithm
 
@@ -277,22 +269,12 @@ class GraNDAG(BaseLearner):
         """
 
         # Control as much randomness as possible
-        set_seed(self.random_seed)
-
-        # set context for running environment
-        context.set_context(mode=context.PYNATIVE_MODE)
-        devices_list = ['CPU', 'GPU', 'Ascend']
-        if self.device_type.lower() == 'ascend':
-            self.device_type = 'Ascend'
-        else:
-            self.device_type = self.device_type.upper()
-        if self.device_type not in devices_list:
-            raise ValueError("Only support 'CPU', 'GPU' and 'Ascend'.")
-        context.set_context(device_target=self.device_type,
-                            device_id=self.device_ids)
+        self._set_seed(self.random_seed)
 
         # create learning model and ground truth model
         data = Tensor(data, columns=columns)
+
+        self.input_dim = data.shape[1]
 
         if data.shape[1] != self.input_dim:
             raise ValueError("The number of variables is `{}`, "
@@ -305,29 +287,21 @@ class GraNDAG(BaseLearner):
                                         hidden_num=self.hidden_num,
                                         hidden_dim=self.hidden_dim,
                                         output_dim=self.OUT_DIM,
-                                        mu=self.mu,
-                                        lamb=self.lamb,
-                                        nonlinear=self.nonlinear,
-                                        norm_prod=self.norm_prod,
-                                        square_prod=self.square_prod)
+                                        nonlinear=self.nonlinear)
         elif self.model_name == "NonLinGaussANM":
             self.model = NonlinearGaussANM(input_dim=self.input_dim,
                                            hidden_num=self.hidden_num,
                                            hidden_dim=self.hidden_dim,
                                            output_dim=self.OUT_DIM_ANM,
-                                           mu=self.mu,
-                                           lamb=self.lamb,
-                                           nonlinear=self.nonlinear,
-                                           norm_prod=self.norm_prod,
-                                           square_prod=self.square_prod)
+                                           nonlinear=self.nonlinear)
         else:
             raise ValueError(
                 "model has to be in {NonLinGauss, NonLinGaussANM}")
 
         # create NormalizationData
-        train_data = NormalizationData(data, train=True,
+        train_data = NormalizationData(data.data, train=True,
                                        normalize=self.normalize)
-        test_data = NormalizationData(data, train=False,
+        test_data = NormalizationData(data.data, train=False,
                                       normalize=self.normalize,
                                       mean=train_data.mean,
                                       std=train_data.std)
@@ -340,7 +314,7 @@ class GraNDAG(BaseLearner):
                 num_neighbors = self.num_neighbors
 
             self.model = neighbors_selection(model=self.model,
-                                             all_samples=data,
+                                             all_samples=data.data,
                                              num_neighbors=num_neighbors,
                                              thresh=self.pns_thresh)
 
@@ -371,47 +345,58 @@ class GraNDAG(BaseLearner):
         hs = []
         not_nlls = []  # Augmented Lagrangian minus (pseudo) NLL
 
-        trainable_para_list = self.model.get_trainable_params()
+        lr_strategy = nn.ExponentialDecayLR(learning_rate=self.lr,
+                                            decay_rate=self.gamma,
+                                            decay_steps=self.lr_decay)
         if self.optimizer == "sgd":
-            optimizer = nn.optim.SGD(trainable_para_list, learning_rate=self.lr)
+            optimizer = nn.optim.SGD(self.model.trainable_params(),
+                                     learning_rate=lr_strategy)
         elif self.optimizer == "rmsprop":
-            optimizer = nn.optim.RMSProp(trainable_para_list, learning_rate=self.lr)
+            optimizer = nn.optim.RMSProp(self.model.trainable_params(),
+                                         learning_rate=lr_strategy)
         else:
             raise ValueError("optimizer should be in {'sgd', 'rmsprop'}")
 
         # Package training information
-        net_loss = GranLoss()
-        net = nn.WithLossCell(self.model, net_loss)
-        net = nn.TrainOneStepCell(net, optimizer)
+        run_mode = 'pynative'
+        if ms.get_context('mode') == ms.GRAPH_MODE:
+            run_mode = 'graph'
+        self.loss_fn = GranLoss(input_dim=self.input_dim,
+                                mu=self.mu, lamb=self.lamb,
+                                norm_prod=self.norm_prod,
+                                square_prod=self.square_prod,
+                                run_mode=run_mode)
+        net_loss = nn.WithLossCell(self.model, self.loss_fn)
+        train_cell = nn.TrainOneStepCell(net_loss, optimizer)
 
+        y_label = ms.Tensor(np.array([0]*self.batch_size, dtype=np.float32))
         # Learning loop:
         for iter_num in tqdm(range(self.iterations), desc='Training Iterations'):
             x, _ = train_data.sample(self.batch_size)
-            ds_data = self._create_dataset(x.asnumpy(), batch_size=self.batch_size)
 
-            w_adj = self.model.get_w_adj()
+            weights = self.model.get_weight_bias_parameters(mode=('w', ))[0]
+            w_adj = self.loss_fn.get_w_adj(weights)
             expm_input = expm(w_adj.asnumpy())
             h = np.trace(expm_input) - self.input_dim
 
             # model train
             self.model.set_train(True)
-            net(*list(ds_data)[0])
+            train_cell(x, y_label)
             self.model.set_train(False)
 
             # clamp edges, thresholding
             if self.edge_clamp_range != 0:
                 to_keep = (w_adj > self.edge_clamp_range) * 1
+                self.loss_fn.adjacency *= to_keep
                 self.model.adjacency *= to_keep
 
-            # logging
-            not_nlls.append(0.5 * self.model.mu * h ** 2
-                            + self.model.lamb * h)
+            not_nlls.append(0.5 * self.loss_fn.mu * h ** 2
+                            + self.loss_fn.lamb * h)
 
             # compute loss on whole validation set
             if iter_num % self.stop_crit_win == 0:
                 x, _ = test_data.sample(test_data.n_samples)
-                loss_val = - ops.reduce_mean(
-                    self.model.compute_log_likelihood(x))
+                loss_val = - msnp.mean(self.model.compute_log_likelihood(x))
                 aug_lagrangians_val.append(
                     [iter_num, loss_val.asnumpy().item() + not_nlls[-1]])
 
@@ -437,32 +422,31 @@ class GraNDAG(BaseLearner):
             if h > self.h_threshold:
                 # if we have found a stationary point of the augmented loss
                 if abs(delta_lambda) < self.omega_lambda or delta_lambda > 0:
-                    self.model.lamb += self.model.mu * h
+                    self.loss_fn.lamb += self.loss_fn.mu * h
 
                     # Did the constraint improve sufficiently?
                     hs.append(h)
                     if len(hs) >= 2:
                         if hs[-1] > hs[-2] * self.omega_mu:
-                            self.model.mu *= 10
+                            self.loss_fn.mu *= 10
 
                     # little hack to make sure the moving average is going down.
-                    gap_in_not_nll = 0.5 * self.model.mu * h ** 2 +\
-                                     self.model.lamb * h - not_nlls[-1]
+                    gap_in_not_nll = 0.5 * self.loss_fn.mu * h ** 2 +\
+                                     self.loss_fn.lamb * h - not_nlls[-1]
                     aug_lagrangians_val[-1][1] += gap_in_not_nll
 
-                    trainable_para_list = self.model.get_trainable_params()
                     if self.optimizer == "rmsprop":
-                        optimizer = nn.optim.RMSProp(trainable_para_list,
-                                                     learning_rate=self.lr)
+                        optimizer = nn.optim.RMSProp(self.model.trainable_params(),
+                                                     learning_rate=lr_strategy)
                     else:
-                        optimizer = nn.optim.SGD(trainable_para_list,
-                                                 learning_rate=self.lr)
-                    net_loss = GranLoss()
-                    net = nn.WithLossCell(self.model, net_loss)
-                    net = nn.TrainOneStepCell(net, optimizer)
+                        optimizer = nn.optim.SGD(self.model.trainable_params(),
+                                                 learning_rate=lr_strategy)
+                    net_loss = nn.WithLossCell(self.model, self.loss_fn)
+                    train_cell = nn.TrainOneStepCell(net_loss, optimizer)
             else:
                 # Final clamping of all edges == 0
-                to_keep = (w_adj > 0).astype(mstype.float32)
+                to_keep = (w_adj > 0).astype(ms.float32)
+                self.loss_fn.adjacency *= to_keep
                 self.model.adjacency *= to_keep
 
                 return self.model
@@ -484,7 +468,8 @@ class GraNDAG(BaseLearner):
             jacobian_adj = compute_jacobian_avg(
                 self.model, train_data, train_data.n_samples).transpose()
         else:
-            jacobian_adj = self.model.get_w_adj()
+            weights = self.model.get_weight_bias_parameters(mode=('w', ))[0]
+            jacobian_adj = self.loss_fn.get_w_adj(weights)
 
         dia_index = msnp.diag_indices(jacobian_adj.shape[0])
         jacobian_adj[dia_index] = 0
@@ -493,38 +478,13 @@ class GraNDAG(BaseLearner):
         thresholds = np.unique(jacobian_adj.asnumpy())
         epsilon = 1e-8
         for step, t in enumerate(thresholds):
-            to_keep = (jacobian_adj > t + epsilon).astype(dtype=mstype.float32)
+            to_keep = (jacobian_adj > t + epsilon).astype(dtype=ms.float32)
             new_adj = self.model.adjacency * to_keep
             if is_acyclic(new_adj):
                 self.model.adjacency = new_adj
                 break
 
         return self.model
-
-    @staticmethod
-    def _create_dataset(x_data, batch_size=50):
-        """
-        Create dataset for network training
-
-        Parameters
-        ----------
-        x_data: numpy.ndarray
-        batch_size: batch size of per training of NN
-
-        Returns
-        -------
-        out: input_data, shape is (batch_size, num_vars)
-        """
-
-        def get_data(x):
-            for i in range(x.shape[0]):
-                yield x[i, :], np.array([0], dtype=np.float32)
-
-        input_data = ds.GeneratorDataset(list(get_data(x_data)),
-                                         column_names=['x', 'y'])
-        input_data = input_data.batch(batch_size)
-
-        return input_data
 
 
 def neighbors_selection(model, all_samples, num_neighbors, thresh):
@@ -549,7 +509,7 @@ def neighbors_selection(model, all_samples, num_neighbors, thresh):
 
     model_adj = model.adjacency.asnumpy()
     model_adj = _pns(model_adj, all_samples, num_neighbors, thresh)
-    model.adjacency = MsTensor(model_adj).copy()
+    model.adjacency = ms.Tensor(model_adj).copy()
 
     return model
 

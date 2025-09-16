@@ -32,7 +32,7 @@ class DataGenerator(object):
         torch.device('cpu') or torch.device('cuda')
     """
 
-    def __init__(self, dataset, normalize=False, device=None) -> None :
+    def __init__(self, dataset, normalize=False, device=None) -> None:
 
         self.dataset = dataset
         self.normalize = normalize
@@ -44,14 +44,14 @@ class DataGenerator(object):
         if self.normalize:
             self.dataset = F.normalize(self.dataset)
 
-    def _draw_single_sample(self, dimension) -> torch.Tensor :
+    def _draw_single_sample(self, dimension) -> torch.Tensor:
 
         index = np.random.randint(0, self.data_size, size=dimension)
-        single_sample = self.dataset[index] # [dimension, n_nodes]
+        single_sample = self.dataset[index]  # [dimension, n_nodes]
 
-        return single_sample.T # [n_nodes, dimension]
+        return single_sample.T  # [n_nodes, dimension]
 
-    def draw_batch(self, batch_size, dimension) -> torch.Tensor :
+    def draw_batch(self, batch_size, dimension) -> torch.Tensor:
         """Draw batch sample
 
         Parameters
@@ -68,4 +68,3 @@ class DataGenerator(object):
             batch.append(single_sample)
 
         return torch.stack(batch)
-

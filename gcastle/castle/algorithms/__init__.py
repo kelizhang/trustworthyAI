@@ -13,10 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__all__ = ['ANMNonlinear', 'GES', 'TTPM', 'DirectLiNGAM', 'ICALiNGAM', 'PC', 'Notears', 'DAG_GNN',
-           'NotearsLowRank', 'RL', 'CORL', 'GraNDAG', 'NotearsNonlinear', 'GOLEM', 'MCSL', 'GAE']
-
-
+from .cat import Cat
 from .ges import GES
 from .ttpm import TTPM
 from .lingam import DirectLiNGAM
@@ -25,12 +22,17 @@ from .pc import PC
 from .anm import ANMNonlinear
 from .gradient.notears import Notears
 from .gradient.notears import NotearsLowRank
+from ..backend.backend_register import get_backend_name
 
-from ..backend import backend, logging
 
-if backend == 'pytorch':
+backend_name = get_backend_name()
+if backend_name == 'pytorch':
     from ..backend.pytorch import *
-elif backend == 'mindspore':
+elif backend_name == 'mindspore':
     from ..backend.mindspore import *
 
-logging.info(f"You are using ``{backend}`` as the backend.")
+
+from castle.common.class_factory import ClassFactory
+
+
+ALL_ALGORITHMS = ClassFactory.algorithms

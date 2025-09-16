@@ -16,7 +16,37 @@
 import numpy as np
 import torch
 
-from castle.common.validator import transfer_to_device
+
+def transfer_to_device(*args, device=None):
+    """
+    Transfer `*args` to `device`
+
+    Parameters
+    ----------
+    args: np.ndarray, torch.Tensor
+        variables that need to transfer to `device`
+    device: str
+        'cpu' or 'gpu', if None, default='cpu
+
+    Returns
+    -------
+    out: args
+    """
+
+    out = []
+    for each in args:
+        if isinstance(each, np.ndarray):
+            each = torch.tensor(each, device=device).float()
+        elif isinstance(each, torch.Tensor):
+            each = each.to(device=device).float()
+        else:
+            raise TypeError(f"Expected type of the args is np.ndarray "
+                            f"or torch.Tensor, but got `{type(each)}`.")
+        out.append(each)
+    if len(out) > 1:
+        return tuple(out)
+    else:
+        return out[0]
 
 
 def compute_constraint(model, w_adj):
@@ -43,9 +73,9 @@ def compute_A_phi(model, norm="none", square=False):
     compute matrix A consisting of products of NN weights
     """
     weights = model.get_parameters(mode='w')[0]
-    prod = torch.eye(model.input_dim)
+    prod = torch.eye(model.input_dim, device=model.device)
     if norm != "none":
-        prod_norm = torch.eye(model.input_dim)
+        prod_norm = torch.eye(model.input_dim, device=model.device)
     for i, w in enumerate(weights):
         if square:
             w = w ** 2
@@ -55,7 +85,7 @@ def compute_A_phi(model, norm="none", square=False):
             prod = torch.einsum("tij,ljt,jk->tik", w,
                                 model.adjacency.unsqueeze(0), prod)
             if norm != "none":
-                tmp = 1. - torch.eye(model.input_dim).unsqueeze(0)
+                tmp = 1. - torch.eye(model.input_dim, device=model.device).unsqueeze(0)
                 prod_norm = torch.einsum("tij,ljt,jk->tik",
                                          torch.ones_like(w).detach(), tmp,
                                          prod_norm)
@@ -70,7 +100,7 @@ def compute_A_phi(model, norm="none", square=False):
     prod = torch.sum(prod, 1)
     if norm == "paths":
         prod_norm = torch.sum(prod_norm, 1)
-        denominator = prod_norm + torch.eye(model.input_dim)  # avoid / 0 on diagonal
+        denominator = prod_norm + torch.eye(model.input_dim, device=model.device)  # avoid / 0 on diagonal
         return (prod / denominator).t()
     elif norm == "none":
         return prod.t()
@@ -97,7 +127,7 @@ def compute_jacobian_avg(model, data_manager, batch_size):
     # compute jacobian of the loss
     for i in range(model.input_dim):
         tmp = torch.autograd.grad(log_probs[i], x, retain_graph=True,
-                                  grad_outputs=torch.ones(batch_size))[0]
+                                  grad_outputs=torch.ones(batch_size, device=model.device))[0]
         jac_avg[i, :] = torch.abs(tmp).mean(0)
 
     return jac_avg

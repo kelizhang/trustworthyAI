@@ -28,7 +28,6 @@ class LSTMDecoder(PointerDecoder):
         super(LSTMDecoder, self).__init__(input_dim=input_dim,
                                           hidden_dim=hidden_dim,
                                           device=device)
-        self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.device = device
         self.lstm_cell = nn.LSTMCell(input_size=hidden_dim,
@@ -39,7 +38,7 @@ class LSTMDecoder(PointerDecoder):
         """"""
         self.batch_size = x.shape[0]
         self.seq_length = x.shape[1]
-        self.encoder_output = x  # 保存起来有用
+        self.encoder_output = x  # It's useful to keep
 
         s_i = torch.mean(x, 1)
         hi_ci = (torch.zeros((self.batch_size, self.hidden_dim), device=s_i.device),
@@ -49,7 +48,7 @@ class LSTMDecoder(PointerDecoder):
         s_list = []
         action_list = []
         prob_list = []
-        for step in range(self.seq_length):
+        for _ in range(self.seq_length):
             h_list.append(hi_ci[0])
             c_list.append(hi_ci[1])
             s_list.append(s_i)
@@ -76,16 +75,12 @@ class MLPDecoder(PointerDecoder):
 
     def __init__(self, input_dim, hidden_dim, device=None) -> None:
         super(MLPDecoder, self).__init__(input_dim=input_dim,
-                                          hidden_dim=hidden_dim,
+                                         hidden_dim=hidden_dim,
                                          device=device)
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
         self.device = device
         self.mlp = self.feedforward_mlp
 
     def forward(self, x) -> tuple:
-
-        self.batch_size = x.shape[0]
         self.seq_length = x.shape[1]
         self.encoder_output = x
 
@@ -94,7 +89,7 @@ class MLPDecoder(PointerDecoder):
         s_list = []
         action_list = []
         prob_list = []
-        for step in range(self.seq_length):
+        for _ in range(self.seq_length):
             s_list.append(s_i)
             s_i, _, pos, prob = self.step_decode(input=s_i, state=None)
 

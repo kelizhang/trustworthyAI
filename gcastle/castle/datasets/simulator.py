@@ -61,7 +61,7 @@ class DAG(object):
 
     @staticmethod
     def _graph_to_adjmat(G):
-        return np.asmatrix(nx.to_numpy_array(G))
+        return nx.to_numpy_array(G)
 
     @staticmethod
     def _BtoW(B, d, w_range):
@@ -272,7 +272,7 @@ class IIDSimulation(object):
     @staticmethod
     def _simulate_linear_sem(W, n, sem_type, noise_scale):
         """
-        Simulate samples from linear SEM with specified type(s) of noise.
+        Simulate samples from linear SEM with specified type of noise.
         For uniform, noise z ~ uniform(-a, a), where a = noise_scale.
 
         Parameters
@@ -281,10 +281,8 @@ class IIDSimulation(object):
             [d, d] weighted adj matrix of DAG.
         n: int
             Number of samples, n=inf mimics population risk.
-        sem_type: str or list of str
-            If str, all variables follow this noise type, e.g., 'gauss', 'exp', 'gumbel', 'uniform', 'logistic'.
-            If list of str, the ith noise variable follows the ith type in the list. 
-            The length of the list should be equal to the number of variables (i.e., d).
+        sem_type: str 
+            gauss, exp, gumbel, uniform, logistic.
         noise_scale: float 
             Scale parameter of noise distribution in linear SEM.
         
@@ -293,40 +291,21 @@ class IIDSimulation(object):
         X: np.ndarray
             [n, d] sample matrix, [d, d] if n=inf
         """
-        def _simulate_single_equation(X, w, scale, sem_type_single):
-            """
-            Simulate a single equation in the SEM.
-            The noise type of this equation is determined by the 'sem_type_single' parameter.
-            
-            Parameters
-            ----------
-            X: np.ndarray
-                [n, num of parents] matrix representing the values of parent variables.
-            w: np.ndarray
-                [num of parents] array representing the weights of parent variables.
-            scale: float
-                Scale parameter for the noise distribution in the SEM.
-            sem_type_single: str
-                The type of noise to use for this variable. Can be 'gauss', 'exp', 'gumbel', 'uniform', 'logistic'.
-        
-            Returns
-            -------
-            x: np.ndarray
-                [n] array representing the values of the simulated variable.
-            """
-            if sem_type_single == 'gauss':
+        def _simulate_single_equation(X, w, scale):
+            """X: [n, num of parents], w: [num of parents], x: [n]"""
+            if sem_type == 'gauss':
                 z = np.random.normal(scale=scale, size=n)
                 x = X @ w + z
-            elif sem_type_single == 'exp':
+            elif sem_type == 'exp':
                 z = np.random.exponential(scale=scale, size=n)
                 x = X @ w + z
-            elif sem_type_single == 'gumbel':
+            elif sem_type == 'gumbel':
                 z = np.random.gumbel(scale=scale, size=n)
                 x = X @ w + z
-            elif sem_type_single == 'uniform':
+            elif sem_type == 'uniform':
                 z = np.random.uniform(low=-scale, high=scale, size=n)
                 x = X @ w + z
-            elif sem_type_single == 'logistic':
+            elif sem_type == 'logistic':
                 x = np.random.binomial(1, sigmoid(X @ w)) * 1.0
             else:
                 raise ValueError('Unknown sem type. In a linear model, \
@@ -340,10 +319,10 @@ class IIDSimulation(object):
         elif np.isscalar(noise_scale):
             scale_vec = noise_scale * np.ones(d)
         else:
-            if len(noise_scale) != d:
+            if isinstance(noise_scale, (list, np.ndarray)) and len(noise_scale) != d:
                 raise ValueError('noise scale must be a scalar or has length d')
             scale_vec = noise_scale
-        G_nx = nx.DiGraph(W)
+        G_nx =  nx.from_numpy_array(W, create_using=nx.DiGraph)
         if not nx.is_directed_acyclic_graph(G_nx):
             raise ValueError('W must be a DAG')
         if np.isinf(n):  # population risk for linear gauss SEM
@@ -354,27 +333,12 @@ class IIDSimulation(object):
             else:
                 raise ValueError('population risk not available')
         # empirical risk
-
-        # check if sem_type is a single string
-        if isinstance(sem_type, str):
-            # If it is, make it a list of size d with the same value
-            sem_type = [sem_type] * d
-        elif isinstance(sem_type, list):
-            # If it's a list, check if the length is equal to d
-            if len(sem_type) != d:
-                raise ValueError(f"The length of sem_type needs to be equal to {d} (the number of variables).")
-            # ensure all elements in the list are strings
-            if not all(isinstance(i, str) for i in sem_type):
-                raise ValueError("All elements in the sem_type list must be strings.")
-        else:
-            raise TypeError("sem_type should be either a string or a list of strings")
-
         ordered_vertices = list(nx.topological_sort(G_nx))
         assert len(ordered_vertices) == d
         X = np.zeros([n, d])
         for j in ordered_vertices:
             parents = list(G_nx.predecessors(j))
-            X[:, j] = _simulate_single_equation(X[:, parents], W[parents, j], scale_vec[j], sem_type[j])
+            X[:, j] = _simulate_single_equation(X[:, parents], W[parents, j], scale_vec[j])
         return X
 
     @staticmethod
@@ -449,7 +413,7 @@ class IIDSimulation(object):
             scale_vec = noise_scale
 
         X = np.zeros([n, d])
-        G_nx = nx.DiGraph(B)
+        G_nx =  nx.from_numpy_array(B, create_using=nx.DiGraph)
         ordered_vertices = list(nx.topological_sort(G_nx))
         assert len(ordered_vertices) == d
         for j in ordered_vertices:
@@ -596,7 +560,7 @@ class Topology(object):
         assert n_nodes > 0, 'The number of nodes must be greater than 0.'
         creation_prob = (2*n_edges)/(n_nodes**2)
         G = nx.erdos_renyi_graph(n=n_nodes, p=creation_prob, seed=seed)
-        B = np.asmatrix(nx.to_numpy_array(G))
+        B = nx.to_numpy_array(G)
         return B
 
 
@@ -630,7 +594,7 @@ class THPSimulation(object):
 
         self._causal_matrix = (causal_matrix != 0).astype(int)
 
-        self._topo = nx.Graph(topology_matrix)
+        self._topo = nx.from_numpy_array(topology_matrix, create_using=nx.Graph)
 
         self._mu_range = mu_range
         self._alpha_range = alpha_range

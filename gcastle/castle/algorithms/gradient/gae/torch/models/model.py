@@ -26,30 +26,31 @@ class MLP(nn.Module):
     def __init__(self, input_dim, layers, units, output_dim,
                  activation=None, device=None) -> None:
         super(MLP, self).__init__()
-        # self.desc = desc
         self.input_dim = input_dim
         self.layers = layers
         self.units = units
         self.output_dim = output_dim
         self.activation = activation
         self.device = device
-
         mlp = []
-        for i in range(layers):
+        for i in range(self.layers):
             input_size = units
             if i == 0:
                 input_size = input_dim
             weight = nn.Linear(in_features=input_size,
                                out_features=self.units,
                                bias=True,
-                               device=self.device)
+                               device=self.device,
+                               dtype=torch.float)
             mlp.append(weight)
-            if activation is not None:
-                mlp.append(activation)
+            if self.activation is not None:
+                mlp.append(self.activation.to(device=self.device, dtype=torch.float))
+
         out_layer = nn.Linear(in_features=self.units,
                               out_features=self.output_dim,
                               bias=True,
-                              device=self.device)
+                              device=self.device,
+                              dtype=torch.float)
         mlp.append(out_layer)
 
         self.mlp = nn.Sequential(*mlp)
@@ -87,9 +88,8 @@ class AutoEncoder(nn.Module):
                            activation=self.activation,
                            device=self.device)
 
-        w = torch.nn.init.uniform_(torch.empty(self.d, self.d,),
-                                   a=-0.1, b=0.1)
-        self.w = torch.nn.Parameter(w.to(device=self.device))
+        w = torch.nn.init.uniform_(torch.empty(self.d, self.d), a=-0.1, b=0.1)
+        self.w = torch.nn.Parameter(w.to(device=self.device, dtype=torch.float))
 
     def forward(self, x):
 
@@ -101,9 +101,8 @@ class AutoEncoder(nn.Module):
 
         mse_loss = torch.square(torch.norm(x - x_est, p=2))
 
-
         return mse_loss, self.w_adj
 
     def _preprocess_graph(self, w_adj):
 
-        return (1. - torch.eye(w_adj.shape[0], device=self.device)) * w_adj
+        return w_adj - torch.diag_embed(torch.diag(w_adj))

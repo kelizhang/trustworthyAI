@@ -13,33 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import random
 import torch
-import logging
-import numpy as np
-
-from castle.common import BaseLearner, Tensor
+from castle.common import GradientBasedLearner, Tensor
 from .trainers.al_trainer import ALTrainer
 from .models.model import AutoEncoder
+from castle.common.class_factory import ClassFactory
 
 
-def set_seed(seed):
-    """
-    Referred from:
-    - https://stackoverflow.com/questions/38469632/tensorflow-non-repeatable-results
-    """
-
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    try:
-        os.environ['PYTHONHASHSEED'] = str(seed)
-    except Exception:
-        pass
-
-
-class GAE(BaseLearner):
+@ClassFactory.algorithms.register()
+class GAE(GradientBasedLearner):
     """
     GAE Algorithm.
     A gradient-based algorithm using graph autoencoder to model non-linear
@@ -47,15 +29,13 @@ class GAE(BaseLearner):
 
     Parameters
     ----------
-    input_dim: int, default: 1
-        dimension of vector for x
     hidden_layers: int, default: 1
         number of hidden layers for encoder and decoder
     hidden_dim: int, default: 4
         hidden size for mlp layer
     activation: callable, default: nn.LeakyReLU(0.05)
         nonlinear functional
-    epochs: int, default: 10
+    iterations: int, default: 10
         Number of iterations for optimization problem
     update_freq: int, default: 3000
         Number of steps for each iteration
@@ -78,50 +58,37 @@ class GAE(BaseLearner):
     h_thresh: float, default: 1e-8
         Tolerance of optimization problem
     graph_thresh: float, default: 0.3
-        Threshold to filter out small values in the graph
+        Threshold to filter out small values in graph
     early_stopping: bool, default: False
         Whether to use early stopping
     early_stopping_thresh: float, default: 1.0
         Threshold ratio for early stopping
     seed: int, default: 1230
         Reproducibility, must be int
-    device_type: str, default: 'cpu'
-        'cpu' or 'gpu'
-    device_ids: int or str, default '0'
-        CUDA devices, it's effective when ``use_gpu`` is True.
-        For single-device modules, ``device_ids`` can be int or str,
-        e.g. 0 or '0', For multi-device modules, ``device_ids`` must be str,
-        format like '0, 1'.
+
     Examples
     --------
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
-    >>> from castle.datasets import DAG, IIDSimulation
+    >>> import castle
+    >>> castle.set_backend('pytorch')
     >>> from castle.algorithms import GAE
-
-
-    >>> # simulate data for graph-auto-encoder
-    >>> weighted_random_dag = DAG.erdos_renyi(n_nodes=10, n_edges=20, weight_range=(0.5, 2.0), seed=1)
-    >>> dataset = IIDSimulation(W=weighted_random_dag, n=2000, method='linear', sem_type='gauss')
-    >>> true_dag, X = dataset.B, dataset.X
-
-    >>> ga = GAE(input_dim=10)
-    >>> ga.learn(X)
-
-    >>> # plot est_dag and true_dag
-    >>> GraphDAG(ga.causal_matrix, true_dag)
-
-    >>> # calculate accuracy
-    >>> met = MetricsDAG(ga.causal_matrix, true_dag)
-    >>> print(met.metrics)
+    >>> from castle.datasets import load_dataset
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
+    >>> X, true_dag, _ = load_dataset('IID_Test')
+    >>> algo = GAE()
+    # If you want to use GPU, you can call CORL().set_context() like the following code:
+    >>> algo.set_context(device_target='GPU') # 'GPU', 'CPU' or 'Ascend'
+    >>> algo.learn(X)
+    >>> plot_causal_graph(algo.causal_matrix, true_dag)
+    >>> met = StructureMetrics(algo.causal_matrix, true_dag)
+    >>> print(met.values)
     """
 
     def __init__(self,
-                 input_dim=1,
                  hidden_layers=1,
                  hidden_dim=4,
                  activation=torch.nn.LeakyReLU(0.05),
-                 epochs=10,
+                 iterations=10,
                  update_freq=3000,
                  init_iter=3,
                  lr=1e-3,
@@ -135,16 +102,12 @@ class GAE(BaseLearner):
                  graph_thresh=0.3,
                  early_stopping=False,
                  early_stopping_thresh=1.0,
-                 seed=1230,
-                 device_type='cpu',
-                 device_ids='0'):
-
+                 seed=1230):
         super(GAE, self).__init__()
-        self.input_dim = input_dim
         self.hidden_layers = hidden_layers
         self.hidden_dim = hidden_dim
         self.activation = activation
-        self.epochs = epochs
+        self.iterations = iterations
         self.update_freq = update_freq
         self.init_iter = init_iter
         self.lr = lr
@@ -159,27 +122,11 @@ class GAE(BaseLearner):
         self.early_stopping = early_stopping
         self.early_stopping_thresh = early_stopping_thresh
         self.seed = seed
-        self.device_type = device_type
-        self.device_ids = device_ids
-
-        if torch.cuda.is_available():
-            logging.info('GPU is available.')
-        else:
-            logging.info('GPU is unavailable.')
-            if self.device_type == 'gpu':
-                raise ValueError("GPU is unavailable, "
-                                 "please set device_type = 'cpu'.")
-        if self.device_type == 'gpu':
-            if self.device_ids:
-                os.environ['CUDA_VISIBLE_DEVICES'] = str(self.device_ids)
-            device = torch.device('cuda')
-        else:
-            device = torch.device('cpu')
-        self.device = device
 
     def learn(self, data, columns=None, **kwargs):
 
-        x = torch.from_numpy(data).to(self.device)
+        data = Tensor(data, columns=columns).data
+        x = torch.tensor(data, device=self.device)
 
         self.n, self.d = x.shape[:2]
         if x.ndim == 2:
@@ -200,7 +147,7 @@ class GAE(BaseLearner):
 
     def _gae(self, x):
 
-        set_seed(self.seed)
+        self._set_seed(self.seed)
         model = AutoEncoder(d=self.d,
                             input_dim=self.input_dim,
                             hidden_layers=self.hidden_layers,
@@ -225,8 +172,11 @@ class GAE(BaseLearner):
                             seed=self.seed,
                             device=self.device)
         w_est = trainer.train(x=x,
-                              epochs=self.epochs,
+                              iterations=self.iterations,
                               update_freq=self.update_freq)
-        w_est = w_est / torch.max(abs(w_est))
+        if w_est is None:
+            w_est = torch.zeros((self.d, self.d))
+        else:
+            w_est = w_est / torch.max(abs(w_est))
 
         return w_est

@@ -153,6 +153,7 @@ class _BaseLiNGAM(BootstrapMixin, metaclass=ABCMeta):
             Indices of predictor variable.
         target : int
             Index of target variable.
+        gamma : float, default=1.0
 
         Returns
         -------
@@ -165,4 +166,3 @@ class _BaseLiNGAM(BootstrapMixin, metaclass=ABCMeta):
         reg = LassoLarsIC(criterion='bic')
         reg.fit(X[:, predictors] * weight, X[:, target])
         return reg.coef_ * weight
-

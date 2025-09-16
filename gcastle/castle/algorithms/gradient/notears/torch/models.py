@@ -1,8 +1,4 @@
 # coding=utf-8
-# 2021.03 added    (1) logging; 
-#                  (2) BaseLearner;
-#                  (3) NotearsMLP, NotearsSob;
-# 2021.03 deleted  (1) __main__
 # Huawei Technologies Co., Ltd. 
 # 
 # Copyright (C) 2021. Huawei Technologies Co., Ltd. All rights reserved.

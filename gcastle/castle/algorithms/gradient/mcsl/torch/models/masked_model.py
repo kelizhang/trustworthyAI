@@ -15,7 +15,7 @@
 
 import torch
 
-from ..helpers.utils import gumbel_sigmoid
+from ..helpers.utils import gumbel_sigmoid, scipy_uniform
 from .masked_nn import MaskedNN
 from .masked_quadratic_regression import MaskedQuadraticRegression
 
@@ -52,19 +52,18 @@ class MaskedModel(torch.nn.Module):
             raise TypeError(f"The argument `model_type` must be one of"
                             f"['nn', 'qr'], but got {self.model_type}.")
         torch.manual_seed(self.seed)
-        w = torch.nn.init.uniform_(torch.Tensor(self.n_nodes, self.n_nodes),
-                                   a=-1e-10, b=1e-10)
+        w = scipy_uniform((self.n_nodes, self.n_nodes), seed, minval=-1e-10, maxval=1e-10,
+                          device=self.device)
         self.w = torch.nn.Parameter(w.to(device=self.device))
 
     def forward(self, x, rho, alpha, temperature) -> tuple:
 
-        w_prime = self._preprocess_graph(self.w, tau=temperature,
-                                         seed=self.seed)
-        w_prime = self.pns_mask * w_prime
-        mse_loss = self._get_mse_loss(x, w_prime)
-        h = (torch.trace(torch.matrix_exp(w_prime * w_prime)) - self.n_nodes)
+        self.w_prime = self._preprocess_graph(self.w, tau=temperature, seed=self.seed)
+        self.w_prime *= self.pns_mask
+        mse_loss = self._get_mse_loss(x, self.w_prime)
+        h = (torch.trace(torch.matrix_exp(self.w_prime * self.w_prime)) - self.n_nodes)
         loss = (0.5 / self.n_samples * mse_loss
-                + self.l1_graph_penalty * torch.linalg.norm(w_prime, ord=1)
+                + self.l1_graph_penalty * torch.linalg.norm(self.w_prime, ord=1)
                 + alpha * h
                 + 0.5 * rho * h * h)
 
@@ -95,8 +94,8 @@ class MaskedModel(torch.nn.Module):
             curr_y = x[:, i]   # Label for current node
             curr_w = w_prime[possible_parents, i]   # Mask for current node
             curr_masked_x = curr_x * curr_w   # Broadcasting
-            curr_y_pred = self.masked_model(curr_masked_x, choice=str(i))    # Use masked features to predict value of current node
+            curr_y_pred = self.masked_model.forward(curr_masked_x, choice=str(i))    # Use masked features to predict value of current node
 
-            mse_loss = mse_loss + torch.sum(torch.square(curr_y_pred.squeeze() - curr_y))
+            mse_loss += torch.sum(torch.square(curr_y_pred.squeeze() - curr_y))
 
         return mse_loss

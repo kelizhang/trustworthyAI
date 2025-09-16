@@ -24,7 +24,7 @@ class BaseEncoder(nn.Module):
     """Base class for network"""
 
     def __init__(self, input_dim, embed_dim, hidden_dim=1024,
-                 device=None) -> None :
+                 device=None) -> None:
         super(BaseEncoder, self).__init__()
         if embed_dim is None:
             embed_dim = input_dim
@@ -41,7 +41,7 @@ class BaseEncoder(nn.Module):
             self.feedforward_conv1d = nn.Sequential(
                 nn.Conv1d(in_channels=embed_dim,
                           out_channels=hidden_dim,
-                          kernel_size=(1, ),
+                          kernel_size=(1,),
                           device=device),
                 nn.ReLU(),
                 nn.Conv1d(in_channels=hidden_dim,
@@ -85,30 +85,30 @@ class PointerDecoder(BaseDecoder):
         self.mask_scores = []
         # Attention mechanism -- glimpse  _encoder_glimpse
         self.conv1d_ref_g = nn.Conv1d(in_channels=input_dim,
-                                 out_channels=hidden_dim,
-                                 kernel_size=(1,),
-                                 device=device)
+                                      out_channels=hidden_dim,
+                                      kernel_size=(1,),
+                                      device=device)
         self.w_q_g = nn.Linear(in_features=hidden_dim,
-                                out_features=hidden_dim,
-                                bias=False,
-                                device=device)
+                               out_features=hidden_dim,
+                               bias=False,
+                               device=device)
         self.v_g = nn.Linear(in_features=hidden_dim,
                              out_features=1,
                              bias=False,
                              device=device)
         # Pointer mechanism  _encoder_pointer
         self.conv1d_ref_p = nn.Conv1d(in_channels=input_dim,
-                                  out_channels=hidden_dim,
-                                  kernel_size=(1,),
-                                  device=device)
+                                      out_channels=hidden_dim,
+                                      kernel_size=(1,),
+                                      device=device)
         self.w_q_p = nn.Linear(in_features=hidden_dim,
-                             out_features=hidden_dim,
-                              bias=False,
-                              device=device)
+                               out_features=hidden_dim,
+                               bias=False,
+                               device=device)
         self.v_p = nn.Linear(in_features=hidden_dim,
-                           out_features=1,
-                           bias=False,
-                           device=device)
+                             out_features=1,
+                             bias=False,
+                             device=device)
 
     def step_decode(self, input, state=None) -> tuple:
         """
@@ -214,7 +214,7 @@ class PointerDecoder(BaseDecoder):
         masked_scores = self.pointer_net(encoder_output_ex, output)
 
         prob = Categorical(logits=masked_scores)
-        log_softmax = prob.log_prob(position.reshape(-1,))
+        log_softmax = prob.log_prob(position.reshape(-1, ))
         self.mask = torch.zeros(1, device=self.device)
 
         return log_softmax

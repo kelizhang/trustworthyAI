@@ -49,29 +49,29 @@ class Actor(object):
                  init_baseline,
                  device,
                  is_train=True
-            ):
+                 ):
 
         self.input_dimension = input_dimension
-        self.hidden_dim      = hidden_dim
-        self.batch_size      = batch_size
-        self.max_length      = max_length
-        self.num_heads       = num_heads
-        self.num_stacks      = num_stacks
-        self.residual        = residual
-        self.alpha           = alpha
-        self.init_baseline   = init_baseline
-        self.lr1_start       = lr1_start
-        self.lr1_decay_rate  = lr1_decay_rate
-        self.lr1_decay_step  = lr1_decay_step
-        self.encoder_type    = encoder_type
-        self.decoder_type    = decoder_type
+        self.hidden_dim = hidden_dim
+        self.batch_size = batch_size
+        self.max_length = max_length
+        self.num_heads = num_heads
+        self.num_stacks = num_stacks
+        self.residual = residual
+        self.alpha = alpha
+        self.init_baseline = init_baseline
+        self.lr1_start = lr1_start
+        self.lr1_decay_rate = lr1_decay_rate
+        self.lr1_decay_step = lr1_decay_step
+        self.encoder_type = encoder_type
+        self.decoder_type = decoder_type
         self.decoder_activation = decoder_activation
         self.decoder_hidden_dim = decoder_hidden_dim
-        self.use_bias          = use_bias
+        self.use_bias = use_bias
         self.use_bias_constant = use_bias_constant
         self.bias_initial_value = bias_initial_value
-        self.is_train        = is_train
-        self.device          = device
+        self.is_train = is_train
+        self.device = device
         # Reward config
         self.avg_baseline = torch.tensor([self.init_baseline],
                                          device=self.device)  # moving baseline for Reinforce
@@ -160,17 +160,17 @@ class Actor(object):
                              hidden_dim=self.hidden_dim,
                              init_baseline=self.init_baseline,
                              device=self.device)
-        
+
         # Optimizer
         self.opt1 = torch.optim.Adam([
-                        {'params': self.encoder.parameters()},
-                        {'params': self.decoder.parameters()},
-                        {'params': self.critic.parameters()}
-                    ], lr=self.lr1_start, betas=(0.9, 0.99), eps=0.0000001)
+            {'params': self.encoder.parameters()},
+            {'params': self.decoder.parameters()},
+            {'params': self.critic.parameters()}
+        ], lr=self.lr1_start, betas=(0.9, 0.99), eps=0.0000001)
 
         self.lr1_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self.opt1, gamma=pow(self.lr1_decay_rate, 1/self.lr1_decay_step))
-        
+            self.opt1, gamma=pow(self.lr1_decay_rate, 1 / self.lr1_decay_step))
+
         self.criterion = nn.MSELoss()
 
     def build_permutation(self, inputs):
@@ -179,31 +179,28 @@ class Actor(object):
         self.input_ = inputs
 
         # encoder
-        self.encoder_output = self.encoder(self.input_)
+        self.encoder_output = self.encoder.forward(self.input_)
 
         # decoder
-        self.samples, self.scores, self.entropy = self.decoder(self.encoder_output)
+        self.samples, self.scores, self.entropy = self.decoder.forward(self.encoder_output)
 
         # self.samples is seq_lenthg * batch size * seq_length
         # cal cross entropy loss * reward
-        graphs_gen = torch.stack(self.samples).permute([1,0,2])
-        # graphs_gen.requires_grad = True
+        graphs_gen = torch.stack(self.samples).permute([1, 0, 2])
         self.graphs_ = graphs_gen
 
         self.graph_batch = torch.mean(graphs_gen, axis=0)
         logits_for_rewards = torch.stack(self.scores)
-        # logits_for_rewards.requires_grad = True
         entropy_for_rewards = torch.stack(self.entropy)
-        # entropy_for_rewards.requires_grad = True
         entropy_for_rewards = entropy_for_rewards.permute([1, 0, 2])
         logits_for_rewards = logits_for_rewards.permute([1, 0, 2])
         self.test_scores = torch.sigmoid(logits_for_rewards)[:2]
-        log_probss = F.binary_cross_entropy_with_logits(input=logits_for_rewards, 
-                                                        target=self.graphs_, 
+        log_probss = F.binary_cross_entropy_with_logits(input=logits_for_rewards,
+                                                        target=self.graphs_,
                                                         reduction='none')
 
         self.log_softmax = torch.mean(log_probss, axis=[1, 2])
-        self.entropy_regularization = torch.mean(entropy_for_rewards, axis=[1,2])
+        self.entropy_regularization = torch.mean(entropy_for_rewards, axis=[1, 2])
 
         self.build_critic()
 
@@ -215,7 +212,7 @@ class Actor(object):
                              hidden_dim=self.hidden_dim,
                              init_baseline=self.init_baseline,
                              device=self.device)
-        self.critic(self.encoder_output)
+        self.critic.forward(self.encoder_output)
 
     def build_reward(self, reward_):
 
@@ -235,18 +232,18 @@ class Actor(object):
         self.reward_baseline = (self.reward - self.avg_baseline - self.critic.predictions).detach()  # [Batch size, 1]
 
         # Loss
-        self.loss1 = (torch.mean(self.reward_baseline * self.log_softmax, 0) 
-                      - 1*self.lr1_scheduler.get_last_lr()[0] * torch.mean(self.entropy_regularization, 0))
+        self.loss1 = (torch.mean(self.reward_baseline * self.log_softmax, 0)
+                      - 1 * self.lr1_scheduler.get_last_lr()[0] * torch.mean(self.entropy_regularization, 0))
         self.loss2 = self.criterion(self.reward - self.avg_baseline, self.critic.predictions)
 
         # Minimize step
         self.opt1.zero_grad()
         self.loss1.backward()
         self.loss2.backward()
-        
+
         nn.utils.clip_grad_norm_(
-            list(self.encoder.parameters()) + 
-            list(self.decoder.parameters()) + 
+            list(self.encoder.parameters()) +
+            list(self.decoder.parameters()) +
             list(self.critic.parameters()), max_norm=1., norm_type=2)
 
         self.opt1.step()

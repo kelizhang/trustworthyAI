@@ -49,47 +49,41 @@ class ALTrainer(object):
         self.optimizer = torch.optim.Adam(self.model.parameters(),
                                           lr=self.lr)
 
-    def train(self, x, epochs, update_freq):
+    def train(self, x, iterations, update_freq):
 
         alpha, beta, rho = self.alpha, self.beta, self.rho
         h, h_new = np.inf, np.inf
         prev_w_est, prev_mse = None, np.inf
-        for epoch in range(1, epochs + 1):
+        w_est = None
+        for epoch in range(1, iterations + 1):
             logging.info(f'Current epoch: {epoch}==================')
+            mse_new, w_new = None, None
             while rho < self.rho_thresh:
-                mse_new, h_new, w_new = self.train_step(x,
-                                                        update_freq,
-                                                        alpha,
-                                                        rho)
+                mse_new, h_new, w_new = self.train_step(x, update_freq, alpha, rho)
                 if h_new > self.gamma * h:
                     rho *= self.beta
                 else:
                     break
             logging.info(f'Current        h: {h_new}')
-
             if self.early_stopping:
-                if (mse_new / prev_mse > self.early_stopping_thresh
-                        and h_new <= 1e-7):
+                if (mse_new / prev_mse > self.early_stopping_thresh  and h_new <= 1e-7):
                     return prev_w_est
                 else:
                     prev_w_est = w_new
                     prev_mse = mse_new
-
             # update rules
             w_est, h = w_new, h_new
             alpha += rho * h_new.detach().cpu()
-
             if h <= self.h_thresh and epoch > self.init_iter:
                 break
-
         return w_est
-
 
     def train_step(self, x, update_freq, alpha, rho):
 
         curr_mse, curr_h, w_adj = None, None, None
         for _ in range(update_freq):
             torch.manual_seed(self.seed)
+            x = x.to(dtype=torch.float, device=self.device)
             curr_mse, w_adj = self.model(x)
             curr_h = compute_h(w_adj)
             loss = ((0.5 / self.n) * curr_mse

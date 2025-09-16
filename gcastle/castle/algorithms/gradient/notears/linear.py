@@ -1,8 +1,4 @@
 # coding=utf-8
-# 2021.03 modified (1) notears_linear(def) to Notears(class)
-# 2021.03 added    (1) logging; 
-#                  (2) BaseLearner
-# 2021.03 deleted  (1) __main__
 # Huawei Technologies Co., Ltd. 
 # 
 # Copyright (C) 2021. Huawei Technologies Co., Ltd. All rights reserved.
@@ -29,8 +25,10 @@ from scipy.special import expit as sigmoid
 from castle.common import BaseLearner, Tensor
 from castle.common.consts import NOTEARS_VALID_PARAMS
 from castle.common.validator import check_args_value
+from castle.common.class_factory import ClassFactory
 
 
+@ClassFactory.algorithms.register()
 class Notears(BaseLearner):
     """
     Notears Algorithm.
@@ -42,7 +40,7 @@ class Notears(BaseLearner):
         l1 penalty parameter
     loss_type: str 
         l2, logistic, poisson
-    max_iter: int 
+    iterations: int
         max num of dual ascent steps
     h_tol: float 
         exit if |h(w_est)| <= htol
@@ -64,20 +62,20 @@ class Notears(BaseLearner):
     --------
     >>> from castle.algorithms import Notears
     >>> from castle.datasets import load_dataset
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
     >>> X, true_dag, _ = load_dataset('IID_Test')
-    >>> n = Notears()
-    >>> n.learn(X)
-    >>> GraphDAG(n.causal_matrix, true_dag)
-    >>> met = MetricsDAG(n.causal_matrix, true_dag)
-    >>> print(met.metrics)
+    >>> algo = Notears()
+    >>> algo.learn(X)
+    >>> plot_causal_graph(algo.causal_matrix, true_dag)
+    >>> met = StructureMetrics(algo.causal_matrix, true_dag)
+    >>> print(met.values)
     """
 
     @check_args_value(NOTEARS_VALID_PARAMS)
     def __init__(self, lambda1=0.1, 
                  loss_type='l2', 
-                 max_iter=100, 
+                 iterations=100,
                  h_tol=1e-8, 
                  rho_max=1e+16, 
                  w_threshold=0.3):
@@ -86,7 +84,7 @@ class Notears(BaseLearner):
 
         self.lambda1 = lambda1
         self.loss_type = loss_type
-        self.max_iter = max_iter
+        self.iterations = iterations
         self.h_tol = h_tol
         self.rho_max = rho_max
         self.w_threshold = w_threshold
@@ -105,9 +103,9 @@ class Notears(BaseLearner):
         """
         X = Tensor(data, columns=columns)
 
-        W_est = self.notears_linear(X, lambda1=self.lambda1, 
+        W_est = self.notears_linear(X.data, lambda1=self.lambda1,
                                     loss_type=self.loss_type, 
-                                    max_iter=self.max_iter, 
+                                    iterations=self.iterations,
                                     h_tol=self.h_tol, 
                                     rho_max=self.rho_max)
         causal_matrix = (abs(W_est) > self.w_threshold).astype(int)
@@ -117,7 +115,7 @@ class Notears(BaseLearner):
         self.causal_matrix = Tensor(causal_matrix, index=X.columns,
                                     columns=X.columns)
 
-    def notears_linear(self, X, lambda1, loss_type, max_iter, h_tol, 
+    def notears_linear(self, X, lambda1, loss_type, iterations, h_tol,
                        rho_max):
         """
         Solve min_W L(W; X) + lambda1 ‖W‖_1 s.t. h(W) = 0 using 
@@ -155,8 +153,6 @@ class Notears(BaseLearner):
             """
             Evaluate value and gradient of acyclicity constraint.
             """
-            #     E = slin.expm(W * W)  # (Zheng et al. 2018)
-            #     h = np.trace(E) - d
             M = np.eye(d) + W * W / d  # (Yu et al. 2019)
             E = np.linalg.matrix_power(M, d - 1)
             h = (E.T * M).sum() - d
@@ -192,10 +188,11 @@ class Notears(BaseLearner):
         if loss_type == 'l2':
             X = X - np.mean(X, axis=0, keepdims=True)
         
-        logging.info('[start]: n={}, d={}, iter_={}, h_={}, rho_={}'.format( \
-                    n, d, max_iter, h_tol, rho_max))
+        logging.info('[start]: n={}, d={}, iter_={}, h_={}, rho_={}'.format(
+            n, d, iterations, h_tol, rho_max)
+        )
 
-        for i in range(max_iter):
+        for i in range(iterations):
             w_new, h_new = None, None
             while rho < rho_max:
                 sol = sopt.minimize(_func, w_est, method='L-BFGS-B', 
@@ -204,8 +201,9 @@ class Notears(BaseLearner):
                 h_new, _ = _h(_adj(w_new))
                 
                 logging.info(
-                    '[iter {}] h={:.3e}, loss={:.3f}, rho={:.1e}'.format( \
-                    i, h_new, _func(w_est)[0], rho))
+                    '[iter {}] h={:.3e}, loss={:.3f}, rho={:.1e}'.format(
+                        i, h_new, _func(w_est)[0], rho)
+                )
                 
                 if h_new > 0.25 * h:
                     rho *= 10

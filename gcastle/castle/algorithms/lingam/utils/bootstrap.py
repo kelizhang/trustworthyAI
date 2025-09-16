@@ -18,7 +18,7 @@ import numpy as np
 from sklearn.utils import check_array, resample
 
 
-class BootstrapMixin():
+class BootstrapMixin:
     """Mixin class for all LiNGAM algorithms that implement the method of bootstrapping."""
 
     def bootstrap(self, X, n_sampling):
@@ -117,7 +117,8 @@ class BootstrapResult(object):
             If int, then The top ``n_directions`` items are included in the result
         min_causal_effect : float, optional (default=None)
             Threshold for detecting causal direction.
-            If float, then causal directions with absolute values of causal effects less than ``min_causal_effect`` are excluded.
+            If float, then causal directions with absolute values of causal effects
+             less than ``min_causal_effect`` are excluded.
         split_by_causal_effect_sign : boolean, optional (default=False)
             If True, then causal directions are split depending on the sign of the causal effect.
 
@@ -189,7 +190,8 @@ class BootstrapResult(object):
             If int, then The top ``n_dags`` items are included in the result
         min_causal_effect : float, optional (default=None)
             Threshold for detecting causal direction.
-            If float, then causal directions with absolute values of causal effects less than ``min_causal_effect`` are excluded.
+            If float, then causal directions with absolute values of causal effects
+             less than ``min_causal_effect`` are excluded.
         split_by_causal_effect_sign : boolean, optional (default=False)
             If True, then causal directions are split depending on the sign of the causal effect.
 
@@ -258,7 +260,8 @@ class BootstrapResult(object):
         ----------
         min_causal_effect : float, optional (default=None)
             Threshold for detecting causal direction.
-            If float, then causal directions with absolute values of causal effects less than ``min_causal_effect`` are excluded.
+            If float, then causal directions with absolute values of causal effects
+             less than ``min_causal_effect`` are excluded.
 
         Returns
         -------
@@ -293,7 +296,8 @@ class BootstrapResult(object):
         ----------
         min_causal_effect : float, optional (default=None)
             Threshold for detecting causal direction.
-            If float, then causal directions with absolute values of causal effects less than ``min_causal_effect`` are excluded.
+            If float, then causal directions with absolute values of causal effects
+             less than ``min_causal_effect`` are excluded.
 
         Returns
         -------

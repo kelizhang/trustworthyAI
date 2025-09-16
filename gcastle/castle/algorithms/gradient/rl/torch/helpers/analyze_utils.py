@@ -21,9 +21,10 @@ from sklearn.preprocessing import PolynomialFeatures
 def graph_prunned_by_coef(graph_batch, X, th=0.3):
     """
     for a given graph, pruning the edge according to edge weights;
-    linear regression for each causal regression for edge weights and then thresholding
+    linear regression for each causal regresison for edge weights and then thresholding
     :param graph_batch: graph
     :param X: dataset
+    :param th: threshold
     :return:
     """
     d = len(graph_batch)
@@ -36,9 +37,9 @@ def graph_prunned_by_coef(graph_batch, X, th=0.3):
             W.append(np.zeros(d))
             continue
 
-        X_train = X[:, col]
+        X_train = X[:, col].cpu().numpy()
 
-        y = X[:, i]
+        y = X[:, i].cpu().numpy()
         reg.fit(X_train, y)
         reg_coeff = reg.coef_
 
@@ -57,9 +58,10 @@ def graph_prunned_by_coef(graph_batch, X, th=0.3):
 def graph_prunned_by_coef_2nd(graph_batch, X, th=0.3):
     """
     for a given graph, pruning the edge according to edge weights;
-    quadratic regression for each causal regression for edge weights and then thresholding
+    quadratic regression for each causal regresison for edge weights and then thresholding
     :param graph_batch: graph
     :param X: dataset
+    :param th: threshold
     :return:
     """
     d = len(graph_batch)
@@ -73,11 +75,11 @@ def graph_prunned_by_coef_2nd(graph_batch, X, th=0.3):
             W.append(np.zeros(d))
             continue
 
-        X_train = X[:, col]
+        X_train = X[:, col].cpu().numpy()
         X_train_expand = poly.fit_transform(X_train)[:, 1:]
         X_train_expand_names = poly.get_feature_names_out()[1:]
-        
-        y = X[:, i]
+
+        y = X[:, i].cpu().numpy()
         reg.fit(X_train_expand, y)
         reg_coeff = reg.coef_
 
@@ -87,11 +89,11 @@ def graph_prunned_by_coef_2nd(graph_batch, X, th=0.3):
         for ci in range(d):
             if col[ci]:
                 xxi = 'x{}'.format(cj)
-                for iii, xxx in enumerate(X_train_expand_names):                
+                for iii, xxx in enumerate(X_train_expand_names):
                     if xxi in xxx:
                         if np.abs(reg_coeff[iii]) > th:
                             new_reg_coeff[ci] = 1.0
-                            break              
+                            break
                 cj += 1
         W.append(new_reg_coeff)
 

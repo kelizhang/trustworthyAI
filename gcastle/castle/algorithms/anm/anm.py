@@ -19,6 +19,7 @@ from itertools import combinations
 from sklearn.gaussian_process import GaussianProcessRegressor
 from castle.common import BaseLearner, Tensor
 from castle.common.independence_tests import hsic_test
+from castle.common.class_factory import ClassFactory
 
 
 class GPR(object):
@@ -144,9 +145,10 @@ class GPR(object):
         self.regressor.fit(x, y)
         y_predict = self.regressor.predict(x)
 
-        return y_predict
+        return y_predict.reshape(-1, 1)
 
 
+@ClassFactory.algorithms.register()
 class ANMNonlinear(BaseLearner):
     """
     Nonlinear causal discovery with additive noise models
@@ -176,8 +178,8 @@ class ANMNonlinear(BaseLearner):
 
     Examples
     --------
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
     >>> from castle.datasets import DAG, IIDSimulation
     >>> from castle.algorithms.anm import ANMNonlinear
 
@@ -191,7 +193,7 @@ class ANMNonlinear(BaseLearner):
     >>> anm.learn(data=X)
 
     >>> # plot predict_dag and true_dag
-    >>> GraphDAG(anm.causal_matrix, true_dag, show=False, save_name='result')
+    >>> plot_causal_graph(anm.causal_matrix, true_dag, show=False, file_path='result.png')
 
     you can also provide more parameters to use it. like the flowing:
     >>> from sklearn.gaussian_process.kernels import Matern, RBF
@@ -200,7 +202,7 @@ class ANMNonlinear(BaseLearner):
     >>> anm = ANMNonlinear(alpha=0.05)
     >>> anm.learn(data=X, regressor=GPR(kernel=kernel))
     >>> # plot predict_dag and true_dag
-    >>> GraphDAG(anm.causal_matrix, true_dag, show=False, save_name='result')
+    >>> plot_causal_graph(anm.causal_matrix, true_dag, show=False, file_path='result.png')
     """
 
     def __init__(self, alpha=0.05):
@@ -228,8 +230,6 @@ class ANMNonlinear(BaseLearner):
                 `test_method(x, y, alpha=0.05)`
         """
 
-        self.regressor = regressor
-
         # create learning model and ground truth model
         data = Tensor(data, columns=columns)
 
@@ -239,8 +239,8 @@ class ANMNonlinear(BaseLearner):
                                     columns=data.columns)
 
         for i, j in combinations(range(node_num), 2):
-            x = data[:, i].reshape((-1, 1))
-            y = data[:, j].reshape((-1, 1))
+            x = data[:, i].data.reshape((-1, 1))
+            y = data[:, j].data.reshape((-1, 1))
 
             flag = test_method(x, y, alpha=self.alpha)
             if flag == 1:

@@ -25,43 +25,43 @@ def BIC_input_graph(X, g, reg_type='LR', score_type='BIC'):
 
     RSS_ls = []
 
-    n, d = X.shape 
+    n, d = X.shape
 
     if reg_type in ('LR', 'QR'):
         reg = LinearRegression()
     else:
-        reg =GaussianProcessRegressor()
+        reg = GaussianProcessRegressor()
 
     poly = PolynomialFeatures()
 
     for i in range(d):
-        y_ = X[:, [i]]
-        inds_x = list(np.abs(g[i])>0.1)
+        y_ = X[:, [i]].cpu().numpy()
+        inds_x = list(np.abs(g[i]) > 0.1)
 
-        if np.sum(inds_x) < 0.1: 
-            y_pred = np.mean(y_)
+        if np.sum(inds_x) < 0.1:
+            y_pred = y_.mean()
         else:
-            X_ = X[:, inds_x]
-            if reg_type == 'QR':              
-                X_ = poly.fit_transform(X_)[:, 1:] 
-            elif reg_type == 'GPR':                
+            X_ = X[:, inds_x].cpu().numpy()
+            if reg_type == 'QR':
+                X_ = poly.fit_transform(X_)[:, 1:]
+            elif reg_type == 'GPR':
                 med_w = np.median(pdist(X_, 'euclidean'))
                 X_ = X_ / med_w
             reg.fit(X_, y_)
             y_pred = reg.predict(X_)
-        RSSi = np.sum(np.square(y_ - y_pred))
+        RSSi = np.square(y_ - y_pred).sum()
 
         if reg_type == 'GPR':
-            RSS_ls.append(RSSi+1.0)
+            RSS_ls.append(RSSi + 1.0)
         else:
             RSS_ls.append(RSSi)
 
     if score_type == 'BIC':
-        return np.log(np.sum(RSS_ls)/n+1e-8) 
+        return np.log(np.sum(RSS_ls) / n + 1e-8)
     elif score_type == 'BIC_different_var':
-        return np.sum(np.log(np.array(RSS_ls)/n)+1e-8) 
-    
-    
+        return np.sum(np.log(np.array(RSS_ls) / n) + 1e-8)
+
+
 def BIC_lambdas(X, gl=None, gu=None, gtrue=None, reg_type='LR', score_type='BIC'):
     """
     :param X: dataset
@@ -72,17 +72,17 @@ def BIC_lambdas(X, gl=None, gu=None, gtrue=None, reg_type='LR', score_type='BIC'
     :param score_type:
     :return: score lower bound, score upper bound, true score (only for monitoring)
     """
-        
+
     n, d = X.shape
 
     if score_type == 'BIC':
-        bic_penalty = np.log(n) / (n*d)
+        bic_penalty = np.log(n) / (n * d)
     elif score_type == 'BIC_different_var':
         bic_penalty = np.log(n) / n
-    
+
     # default gl for BIC score: complete graph (except digonals)
     if gl is None:
-        g_ones= np.ones((d,d))
+        g_ones = np.ones((d, d))
         for i in range(d):
             g_ones[i, i] = 0
         gl = g_ones
@@ -92,15 +92,14 @@ def BIC_lambdas(X, gl=None, gu=None, gtrue=None, reg_type='LR', score_type='BIC'
         gu = np.zeros((d, d))
 
     sl = BIC_input_graph(X, gl, reg_type, score_type)
-    su = BIC_input_graph(X, gu, reg_type, score_type) 
+    su = BIC_input_graph(X, gu, reg_type, score_type)
 
     if gtrue is None:
         strue = sl - 10
     else:
-        print(BIC_input_graph(X, gtrue, reg_type, score_type))
-        print(gtrue)
-        print(bic_penalty)
+        # print(BIC_input_graph(X, gtrue, reg_type, score_type))
+        # print(gtrue)
+        # print(bic_penalty)
         strue = BIC_input_graph(X, gtrue, reg_type, score_type) + np.sum(gtrue) * bic_penalty
-    
-    return sl, su, strue
 
+    return sl, su, strue

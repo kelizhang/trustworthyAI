@@ -20,8 +20,10 @@ from sklearn.decomposition import FastICA
 
 from .utils.base import _BaseLiNGAM
 from castle.common import BaseLearner, Tensor
+from castle.common.class_factory import ClassFactory
 
 
+@ClassFactory.algorithms.register()
 class ICALiNGAM(_BaseLiNGAM, BaseLearner):
     """
     ICALiNGAM Algorithm.
@@ -32,7 +34,7 @@ class ICALiNGAM(_BaseLiNGAM, BaseLearner):
     ----------
     random_state : int, optional (default=None)
         ``random_state`` is the seed used by the random number generator.
-    max_iter : int, optional (default=1000)
+    iterations : int, optional (default=1000)
         The maximum number of iterations of FastICA.
     thresh : float,  default='0.3'
         Drop edge if |weight| < threshold
@@ -54,25 +56,25 @@ class ICALiNGAM(_BaseLiNGAM, BaseLearner):
     --------
     >>> from castle.algorithms import ICALiNGAM
     >>> from castle.datasets import load_dataset
-    >>> from castle.common import GraphDAG
-    >>> from castle.metrics import MetricsDAG
+    >>> from castle import plot_causal_graph
+    >>> from castle.metrics import StructureMetrics
     >>> X, true_dag, _ = load_dataset(name='IID_Test')
     >>> n = ICALiNGAM()
     >>> n.learn(X)
-    >>> GraphDAG(n.causal_matrix, true_dag)
-    >>> met = MetricsDAG(n.causal_matrix, true_dag)
-    >>> print(met.metrics)
+    >>> plot_causal_graph(n.causal_matrix, true_dag)
+    >>> met = StructureMetrics(n.causal_matrix, true_dag)
+    >>> print(met.values)
     """
 
-    def __init__(self, random_state=None, max_iter=1000, thresh=0.3):
+    def __init__(self, random_state=None, iterations=1000, thresh=0.3):
 
         super().__init__()
         
         self._random_state = random_state
-        self._max_iter = max_iter
+        self._iterations = iterations
         self._thresh = thresh
 
-    def learn(self, data, columns=None):
+    def learn(self, data, columns=None, **kwargs):
         """
         Set up and run the ICALiNGAM algorithm.
 
@@ -85,7 +87,7 @@ class ICALiNGAM(_BaseLiNGAM, BaseLearner):
         """
         X = Tensor(data, columns=columns)
 
-        self.fit(X)
+        self.fit(X.data)
 
         weight_causal_matrix = self.adjacency_matrix_.T
         self.weight_causal_matrix = Tensor(weight_causal_matrix,
@@ -113,7 +115,7 @@ class ICALiNGAM(_BaseLiNGAM, BaseLearner):
         X = check_array(X)
 
         # obtain a unmixing matrix from the given data
-        ica = FastICA(max_iter=self._max_iter, random_state=self._random_state)
+        ica = FastICA(max_iter=self._iterations, random_state=self._random_state)
         ica.fit(X)
         W_ica = ica.components_
 
@@ -134,7 +136,8 @@ class ICALiNGAM(_BaseLiNGAM, BaseLearner):
 
         return self._estimate_adjacency_matrix(X)
 
-    def _search_causal_order(self, matrix):
+    @staticmethod
+    def _search_causal_order(matrix):
         """
         Obtain a causal order from the given matrix strictly.
 
