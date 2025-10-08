@@ -70,7 +70,7 @@ class NormalizationData(object):
         else:
             data = data[shuffle_idx[train_samples:]]
         # as tensor
-        self.data_set = torch.as_tensor(data, device=self.device)
+        self.data_set = torch.as_tensor(data, dtype=torch.double, device=self.device)
 
         # Normalize data
         self.mean, self.std = mean, std
@@ -99,7 +99,6 @@ class NormalizationData(object):
                                          size=(int(batch_size),),
                                          replace=False)
         samples = self.data_set[torch.as_tensor(sample_idxs).long()]
-
         return samples, torch.ones_like(samples)
 
 

@@ -153,16 +153,16 @@ class RL(GradientBasedLearner):
                  transpose=False,
                  score_type='BIC',
                  reg_type='LR',
-                 lambda_iter_num=100,
+                 lambda_iter_num=1000,
                  lambda_flag_default=True,
                  score_bd_tight=False,
                  lambda2_update=10,
                  score_lower=0.0,
                  score_upper=0.0,
                  seed=8,
-                 iterations=100,
+                 iterations=20000,
                  lr1_start=0.001,
-                 lr1_decay_step=100,
+                 lr1_decay_step=5000,
                  lr1_decay_rate=0.96,
                  alpha=0.99,
                  init_baseline=-1.0,
@@ -220,6 +220,7 @@ class RL(GradientBasedLearner):
         """
 
         self.dag = dag
+        data = data.astype('float')
         X = Tensor(data, columns=columns)
         X_torch = torch.tensor(X.data, device=self.device)
         self.data_size = X.shape[0]

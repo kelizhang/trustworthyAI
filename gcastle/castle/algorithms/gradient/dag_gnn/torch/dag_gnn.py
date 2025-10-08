@@ -244,8 +244,7 @@ class DAGGNN(GradientBasedLearner):
         kl_train = []
         origin_a = None
         for batch_idx, (data, relations) in enumerate(train_loader):
-            x = Variable(data)
-
+            x = Variable(data).to(dtype=torch.double, device=self.device)
             optimizer.zero_grad()
 
             logits, origin_a = self.encoder(x)

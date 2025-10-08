@@ -113,8 +113,8 @@ class CORL(GradientBasedLearner):
                  reward_score_type='BIC',
                  reward_regression_type='LR',
                  reward_gpr_alpha=1.0,
-                 iterations=100,
-                 lambda_iter_num=100,
+                 iterations=10000,
+                 lambda_iter_num=500,
                  actor_lr=1e-4,
                  critic_lr=1e-3,
                  alpha=0.99,  # for score function
@@ -162,7 +162,7 @@ class CORL(GradientBasedLearner):
                 between nodes `i` and `j` , the element `1` indicates that
                 there may or may not be an edge.
         """
-
+        data = data.astype('float')
         X = Tensor(data, columns=columns)
         self.seq_length = X.shape[1]  # seq_length == n_nodes
         if X.shape[1] > self.batch_size:

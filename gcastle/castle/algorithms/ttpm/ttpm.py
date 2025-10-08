@@ -34,8 +34,8 @@ class TTPM(BaseLearner):
 
     Parameters
     ----------
-    topology_matrix: np.matrix
-        Interpreted as an adjacency matrix to generate the graph.
+    topology_matrix: array-like
+        # Interpreted as an adjacency matrix to generate the graph.
         It should have two dimensions, and should be square.
 
     delta: float, default=0.1
@@ -78,14 +78,16 @@ class TTPM(BaseLearner):
     def __init__(self, topology_matrix, delta=0.1, epsilon=1,
                  max_hop=0, penalty='BIC', iterations=20, prior_knowledge=None):
         BaseLearner.__init__(self)
-        assert isinstance(topology_matrix, np.ndarray), \
-            'topology_matrix should be np.matrix object'
         assert topology_matrix.ndim == 2, \
             'topology_matrix should be two dimension'
         assert topology_matrix.shape[0] == topology_matrix.shape[1], \
             'The topology_matrix should be square.'
-        self._topo = nx.from_numpy_array(topology_matrix,
-                                          create_using=nx.Graph)
+        if isinstance(topology_matrix, (np.ndarray, np.matrix)):
+            self._topo = nx.from_numpy_array(topology_matrix, create_using=nx.Graph)
+        elif isinstance(topology_matrix, pd.DataFrame):
+            self._topo = nx.from_pandas_adjacency(topology_matrix, create_using=nx.Graph)
+        else:
+            raise TypeError('topology_matrix should be either a numpy array or a pandas adjacency matrix')
         # initialize instance variables
         self._penalty = penalty
         self._delta = delta

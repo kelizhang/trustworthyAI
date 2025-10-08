@@ -134,6 +134,7 @@ class NotearsNonlinear(GradientBasedLearner):
             Column labels to use for resulting tensor. Will default to
             RangeIndex (0, 1, 2, ..., n) if no column labels are provided.
         """
+        data = data.astype('float')
         X = Tensor(data, columns=columns)
 
         input_dim = X.shape[1]
